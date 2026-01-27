@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8000:8000"
+    depends_on:
+      - file-service
+      - prompt-registry
+
+  file-service:
+    build: ./services/file-service
+    ports:
+      - "8001:8000"
+
+  prompt-registry:
+    build: ./services/prompt-registry
+    ports:
+      - "8002:8000"
+
+  domain-analyze:
+    build: ./services/domain-analyze
+    ports:
+      - "8003:8000"
+
+  knowledge-base:
+    build: ./services/knowledge-base
+    ports:
+      - "8004:8000"
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
