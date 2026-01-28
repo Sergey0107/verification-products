@@ -3,6 +3,7 @@ FROM python:3.11-slim
 # 1. Переменные окружения
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 # 2. Рабочая директория внутри контейнера
 WORKDIR /app
@@ -19,6 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. Копируем код приложения
 COPY app ./app
+COPY alembic.ini .
+COPY migration ./migration
 
 # 6. Порт (информационно)
 EXPOSE 8000

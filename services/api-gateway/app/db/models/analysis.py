@@ -1,0 +1,55 @@
+from sqlalchemy import Column, String, Boolean, DateTime
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.sql import func, text
+from app.db.base import Base
+
+
+class Analysis(Base):
+    __tablename__ = "analysis"
+    __table_args__ = {"schema": "analysis"}
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    status = Column(String, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class ComparisonRow(Base):
+    __tablename__ = "comparison_row"
+    __table_args__ = {"schema": "analysis"}
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    characteristic = Column(String, nullable=False)
+    tz_value = Column(JSONB)
+    passport_value = Column(JSONB)
+    llm_result = Column(Boolean)
+    user_result = Column(Boolean)
+    source = Column(String)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class UserEdit(Base):
+    __tablename__ = "user_edit"
+    __table_args__ = {"schema": "analysis"}
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    comparison_row_id = Column(UUID(as_uuid=True), nullable=False)
+    old_value = Column(JSONB)
+    new_value = Column(JSONB)
+    edited_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+__all__ = ["Analysis", "ComparisonRow", "UserEdit"]

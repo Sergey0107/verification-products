@@ -5,3 +5,8 @@ sqlalchemy
 asyncpg
 alembic
 httpx
+passlib[bcrypt]
+python-jose
+pgvector
+python-dotenv
+psycopg2-binary

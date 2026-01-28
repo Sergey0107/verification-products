@@ -8,6 +8,8 @@ services:
     depends_on:
       - file-service
       - prompt-registry
+    volumes:
+      - ./services/api-gateway/migration:/app/migration
 
   file-service:
     build: ./services/file-service
@@ -30,11 +32,12 @@ services:
       - "8004:8000"
 
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
+    container_name: analyzer-postgres
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: app
+      POSTGRES_DB: analyzer
+      POSTGRES_USER: analyzer
+      POSTGRES_PASSWORD: analyzer
     ports:
       - "5432:5432"
     volumes:
