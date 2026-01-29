@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY alembic.ini .
 COPY migration ./migration
+COPY scripts ./scripts
 
 # 6. Порт (информационно)
 EXPOSE 8000
