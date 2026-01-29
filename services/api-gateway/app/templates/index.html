@@ -1,0 +1,74 @@
+﻿<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Verification Products</title>
+    <link rel="stylesheet" href="/static/css/home.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&family=Unbounded:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Сравнение паспорта изделия и ТЗ</p>
+          <h1 class="title">Список анализов</h1>
+        </div>
+        <button class="btn btn-primary" type="button" data-open>Добавить</button>
+      </header>
+
+      <section class="list">
+        {% for item in items %}
+        <article class="list-item">
+          <div class="meta">
+            <p class="meta-label">Техническое задание:</p>
+            <p class="meta-value">{{ item.tz }}</p>
+          </div>
+          <div class="meta">
+            <p class="meta-label">Паспорт изделия:</p>
+            <p class="meta-value">{{ item.passport }}</p>
+          </div>
+          <div class="meta">
+            <p class="meta-label">Статус:</p>
+            <p class="status status-{{ item.status_key }}">{{ item.status }}</p>
+          </div>
+          <button class="btn btn-outline" type="button">Открыть</button>
+        </article>
+        {% endfor %}
+      </section>
+
+      <div class="modal" data-modal hidden>
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="upload-title">
+          <header class="modal-header">
+            <h2 id="upload-title" class="modal-title">Новый анализ</h2>
+            <button class="btn btn-outline btn-icon" type="button" data-close>✕</button>
+          </header>
+          <form class="upload-form" action="#" method="post" enctype="multipart/form-data">
+            <div class="field">
+              <label class="field-label" for="tz_file">Техническое задание</label>
+              <div class="input-row">
+                <input id="tz_file" name="tz_file" type="file" />
+                <button class="btn btn-secondary" type="button">Открыть</button>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="passport_file">Паспорт изделия</label>
+              <div class="input-row">
+                <input id="passport_file" name="passport_file" type="file" />
+                <button class="btn btn-secondary" type="button">Открыть</button>
+              </div>
+            </div>
+            <button class="btn btn-primary" type="submit">Запустить анализ</button>
+          </form>
+        </div>
+      </div>
+    </main>
+    <script src="/static/js/home.js"></script>
+  </body>
+</html>
