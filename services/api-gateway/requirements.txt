@@ -6,8 +6,10 @@ sqlalchemy
 asyncpg
 alembic
 httpx
-passlib[bcrypt]
+passlib[argon2]
+bcrypt==4.0.1
 python-jose
+python-multipart
 pgvector
 python-dotenv
 psycopg2-binary
