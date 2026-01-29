@@ -1,6 +1,12 @@
 fastapi
 uvicorn[standard]
 pydantic-settings
+python-multipart
+boto3
+celery
+aiofiles
+httpx
+pydantic-settings
 sqlalchemy
 asyncpg
 alembic

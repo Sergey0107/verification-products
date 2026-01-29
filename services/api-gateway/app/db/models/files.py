@@ -19,7 +19,8 @@ class File(Base):
     storage_path = Column(String, nullable=False)
     mime_type = Column(String)
     size_bytes = Column(BigInteger)
-    uploaded_at = Column(DateTime, server_default=func.now(), nullable=False)
+    status = Column(String, nullable=False, server_default=text("'uploading'"))
+    uploaded_at = Column(DateTime, nullable=True)
 
 
 __all__ = ["File"]

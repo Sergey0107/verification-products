@@ -9,6 +9,8 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"
+    env_file:
+      - ./env/.env
     depends_on:
       - file-service
       - prompt-registry
@@ -22,6 +24,40 @@ services:
     build: ./services/file-service
     ports:
       - "8001:8000"
+    env_file:
+      - ./env/.env
+    environment:
+      S3_ENDPOINT: https://storage.yandexcloud.net
+      S3_REGION: ru-central1
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: rpc://
+      TMP_DIR: /data/uploads
+      API_GATEWAY_URL: http://api-gateway:8000
+    volumes:
+      - filedata:/data
+
+  file-service-worker:
+    build: ./services/file-service
+    command: celery -A app.celery_app worker -l info
+    env_file:
+      - ./env/.env
+    environment:
+      S3_ENDPOINT: https://storage.yandexcloud.net
+      S3_REGION: ru-central1
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: rpc://
+      TMP_DIR: /data/uploads
+      API_GATEWAY_URL: http://api-gateway:8000
+    volumes:
+      - filedata:/data
+    depends_on:
+      - rabbitmq
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
 
   prompt-registry:
     build: ./services/prompt-registry
@@ -52,3 +88,4 @@ services:
 
 volumes:
   pgdata:
+  filedata:

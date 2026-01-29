@@ -1,12 +1,17 @@
 import httpx
-from fastapi import Depends, FastAPI, Request
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user_optional, router as auth_router
+from app.db.models.analysis import Analysis
+from app.db.models.files import File as FileModel
 from app.db.models.users import User
 from app.db.session import AsyncSessionLocal, get_db
 
@@ -22,6 +27,7 @@ ALLOWED_PATHS = {
     "/auth/login/form",
     "/auth/register",
     "/auth/register/form",
+    "/files/callback",
     "/health",
 }
 ALLOWED_STATIC = {"/static/css/login.css", "/static/css/register.css"}
@@ -106,6 +112,110 @@ async def logout():
     response = RedirectResponse(url="/login", status_code=302)
     response.delete_cookie("access_token")
     return response
+
+
+@app.post("/files/upload")
+async def upload_files(
+    tz_file: UploadFile = File(...),
+    passport_file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    analysis = Analysis(status="uploading")
+    db.add(analysis)
+    await db.flush()
+    await db.refresh(analysis)
+
+    tz_key = f"tz/{uuid4()}_{tz_file.filename}"
+    passport_key = f"passport/{uuid4()}_{passport_file.filename}"
+
+    tz_record = FileModel(
+        analysis_id=analysis.id,
+        file_type="tz",
+        original_name=tz_file.filename or "",
+        storage_path=tz_key,
+        status="uploading",
+    )
+    passport_record = FileModel(
+        analysis_id=analysis.id,
+        file_type="passport",
+        original_name=passport_file.filename or "",
+        storage_path=passport_key,
+        status="uploading",
+    )
+    db.add_all([tz_record, passport_record])
+    await db.flush()
+    await db.refresh(tz_record)
+    await db.refresh(passport_record)
+    await db.commit()
+
+    async with httpx.AsyncClient() as client:
+        files = {
+            "tz_file": (tz_file.filename, await tz_file.read(), tz_file.content_type),
+            "passport_file": (
+                passport_file.filename,
+                await passport_file.read(),
+                passport_file.content_type,
+            ),
+        }
+        data = {
+            "analysis_id": str(analysis.id),
+            "tz_file_id": str(tz_record.id),
+            "passport_file_id": str(passport_record.id),
+            "tz_key": tz_key,
+            "passport_key": passport_key,
+        }
+        response = await client.post(
+            "http://file-service:8000/files/upload-batch", files=files, data=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+@app.post("/files/callback")
+async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
+    try:
+        file_id = UUID(payload.get("file_id"))
+        analysis_id = UUID(payload.get("analysis_id"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ids")
+
+    status_value = payload.get("status")
+    if status_value not in {"uploaded", "failed"}:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    values = {"status": status_value}
+    if status_value == "uploaded":
+        values.update(
+            {
+                "storage_path": payload.get("storage_path"),
+                "mime_type": payload.get("mime_type"),
+                "size_bytes": payload.get("size_bytes"),
+                "uploaded_at": datetime.utcnow(),
+            }
+        )
+
+    await db.execute(
+        update(FileModel)
+        .where(FileModel.id == file_id)
+        .where(FileModel.analysis_id == analysis_id)
+        .values(**values)
+    )
+    await db.commit()
+
+    result = await db.execute(
+        select(func.count(FileModel.id)).where(
+            FileModel.analysis_id == analysis_id, FileModel.status == "uploaded"
+        )
+    )
+    if (result.scalar_one() or 0) >= 2:
+        await db.execute(
+            update(Analysis)
+            .where(Analysis.id == analysis_id)
+            .values(status="ready", updated_at=datetime.utcnow())
+        )
+        await db.commit()
+
+    return {"ok": True}
 
 @app.get("/health")
 async def health():
