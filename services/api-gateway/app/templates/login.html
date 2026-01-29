@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Вход</title>
+    <link rel="stylesheet" href="/static/css/login.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&family=Unbounded:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <main class="login-page">
+      <section class="login-card">
+        <header class="login-header">
+          <p class="eyebrow">Verification Products</p>
+          <h1 class="title">Вход</h1>
+        </header>
+        <form class="login-form" action="/auth/login/form" method="post">
+          {% if error %}
+          <p class="error">Неверный логин или пароль</p>
+          {% endif %}
+          <label class="field">
+            <span class="field-label">Логин</span>
+            <input name="login" type="text" required />
+          </label>
+          <label class="field">
+            <span class="field-label">Пароль</span>
+            <input name="password" type="password" required />
+          </label>
+          <button class="btn btn-primary" type="submit">Войти</button>
+          {% if show_register %}
+          <a class="btn btn-secondary" href="/register">Регистрация</a>
+          {% endif %}
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

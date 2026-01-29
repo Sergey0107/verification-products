@@ -39,6 +39,12 @@ body {
   margin-bottom: 28px;
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   font-size: 13px;

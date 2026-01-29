@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Регистрация</title>
+    <link rel="stylesheet" href="/static/css/register.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&family=Unbounded:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <main class="login-page">
+      <section class="login-card">
+        <header class="login-header">
+          <p class="eyebrow">Verification Products</p>
+          <h1 class="title">Регистрация</h1>
+        </header>
+        <form class="login-form" action="/auth/register/form" method="post">
+          {% if error %}
+          <p class="error">Логин уже занят</p>
+          {% endif %}
+          <label class="field">
+            <span class="field-label">Логин</span>
+            <input name="login" type="text" required />
+          </label>
+          <label class="field">
+            <span class="field-label">Пароль</span>
+            <input name="password" type="password" required />
+          </label>
+          <button class="btn btn-primary" type="submit">Создать аккаунт</button>
+          <a class="btn btn-secondary" href="/login">Назад ко входу</a>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
