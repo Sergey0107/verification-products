@@ -9,6 +9,26 @@ venv/
 .venv/
 ENV/
 .env/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+pip-wheel-metadata/
+*.log
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
 
 # OS
 .DS_Store
