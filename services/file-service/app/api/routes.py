@@ -1,11 +1,14 @@
 from pathlib import Path
+from uuid import uuid4
 
 import aiofiles
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from celery.result import AsyncResult
 
 from app.celery_app import celery_app
 from app.core.config import settings
+from app.services.storage import download_file_path
 from app.tasks import upload_to_s3
 
 router = APIRouter()
@@ -59,3 +62,23 @@ async def upload_batch(
 async def upload_status(task_id: str):
     result = AsyncResult(task_id, app=celery_app)
     return {"task_id": task_id, "status": result.status, "result": result.result}
+
+
+@router.get("/files/download")
+async def download_file(
+    key: str,
+    name: str,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        downloads_dir = Path(settings.TMP_DIR) / "downloads"
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        target_path = downloads_dir / f"{uuid4()}_{name}"
+        download_file_path(key, str(target_path))
+        background_tasks.add_task(target_path.unlink, missing_ok=True)
+        return FileResponse(
+            path=str(target_path),
+            filename=name,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

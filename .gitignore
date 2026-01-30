@@ -9,6 +9,7 @@ venv/
 .venv/
 ENV/
 .env/
+.env.example/
 env/
 
 # IDE

@@ -127,6 +127,16 @@ input[type="file"] {
   font-weight: 600;
 }
 
+.file-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+}
+
+.file-link:hover {
+  border-bottom-color: currentColor;
+}
+
 .status {
   margin: 0;
   font-weight: 600;

@@ -25,20 +25,32 @@
         </div>
       </header>
 
-      <section class="list">
+      <section class="list" data-list>
         {% for item in items %}
-        <article class="list-item">
+        <article class="list-item" data-analysis-id="{{ item.analysis_id }}">
           <div class="meta">
             <p class="meta-label">Техническое задание:</p>
-            <p class="meta-value">{{ item.tz }}</p>
+            <p class="meta-value">
+              {% if item.tz_id %}
+              <a class="file-link" href="/files/{{ item.tz_id }}/download">{{ item.tz }}</a>
+              {% else %}
+              {{ item.tz }}
+              {% endif %}
+            </p>
           </div>
           <div class="meta">
             <p class="meta-label">Паспорт изделия:</p>
-            <p class="meta-value">{{ item.passport }}</p>
+            <p class="meta-value">
+              {% if item.passport_id %}
+              <a class="file-link" href="/files/{{ item.passport_id }}/download">{{ item.passport }}</a>
+              {% else %}
+              {{ item.passport }}
+              {% endif %}
+            </p>
           </div>
           <div class="meta">
             <p class="meta-label">Статус:</p>
-            <p class="status status-{{ item.status_key }}">{{ item.status }}</p>
+            <p class="status status-{{ item.status_key }}" data-status>{{ item.status }}</p>
           </div>
           <button class="btn btn-outline" type="button">Открыть</button>
         </article>
@@ -52,7 +64,7 @@
             <h2 id="upload-title" class="modal-title">Новый анализ</h2>
             <button class="btn btn-outline btn-icon" type="button" data-close>✕</button>
           </header>
-          <form class="upload-form" action="/files/upload" method="post" enctype="multipart/form-data">
+          <form class="upload-form" data-upload-form action="/files/upload" method="post" enctype="multipart/form-data">
             <div class="field">
               <label class="field-label" for="tz_file">Техническое задание</label>
               <div class="input-row">
