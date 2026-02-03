@@ -13,3 +13,4 @@ python-multipart
 pgvector
 python-dotenv
 psycopg2-binary
+celery

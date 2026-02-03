@@ -6,10 +6,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
 
 from app.db.models.analysis import Analysis
 from app.db.models.files import File as FileModel
+from app.db.models.extraction_jobs import ExtractionJob
 from app.db.session import get_db
+from app.tasks import extract_file
 
 router = APIRouter()
 
@@ -88,11 +91,17 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         values.update(
             {
                 "storage_path": payload.get("storage_path"),
+                "storage_url": payload.get("url"),
                 "mime_type": payload.get("mime_type"),
                 "size_bytes": payload.get("size_bytes"),
                 "uploaded_at": datetime.utcnow(),
             }
         )
+
+    status_before_result = await db.execute(
+        select(Analysis.status).where(Analysis.id == analysis_id)
+    )
+    status_before = status_before_result.scalar_one_or_none()
 
     await db.execute(
         update(FileModel)
@@ -116,13 +125,52 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
             FileModel.analysis_id == analysis_id, FileModel.status == "uploaded"
         )
     )
-    if (result.scalar_one() or 0) >= 2:
+    uploaded_count = result.scalar_one() or 0
+    if uploaded_count >= 2 and status_before != "files_uploaded":
         await db.execute(
             update(Analysis)
             .where(Analysis.id == analysis_id)
             .values(status="files_uploaded", updated_at=datetime.utcnow())
         )
+        files_result = await db.execute(
+            select(FileModel).where(
+                FileModel.analysis_id == analysis_id, FileModel.status == "uploaded"
+            )
+        )
+        new_jobs = []
+        for file_record in files_result.scalars().all():
+            stmt = (
+                insert(ExtractionJob)
+                .values(
+                    analysis_id=analysis_id,
+                    file_id=file_record.id,
+                    file_type=file_record.file_type,
+                    status="queued",
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["analysis_id", "file_id", "file_type"]
+                )
+                .returning(ExtractionJob.id)
+            )
+            result = await db.execute(stmt)
+            job_id = result.scalar_one_or_none()
+            if job_id:
+                new_jobs.append(
+                    (
+                        str(job_id),
+                        str(analysis_id),
+                        str(file_record.id),
+                        file_record.file_type,
+                        file_record.storage_path,
+                        file_record.storage_url,
+                    )
+                )
         await db.commit()
+        for job_id, analysis_id_value, file_id, file_type, storage_path, storage_url in new_jobs:
+            extract_file.apply_async(
+                args=[job_id, analysis_id_value, file_id, file_type, storage_path, storage_url],
+                task_id=job_id,
+            )
 
     return {"ok": True}
 

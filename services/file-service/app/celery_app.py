@@ -8,3 +8,21 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=["app.tasks"],
 )
+
+celery_app.conf.update(
+    task_default_queue="file_service",
+    task_default_exchange="file_service",
+    task_default_routing_key="file_service",
+    task_queues={
+        "file_service": {
+            "exchange": "file_service",
+            "routing_key": "file_service",
+        },
+    },
+    task_routes={
+        "file_service.upload_to_s3": {
+            "queue": "file_service",
+            "routing_key": "file_service",
+        },
+    },
+)

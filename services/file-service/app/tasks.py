@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.services.storage import upload_file_path
 
 
-@celery_app.task(name="file_service.upload_to_s3")
+@celery_app.task(name="file_service.upload_to_s3", queue="file_service")
 def upload_to_s3(
     file_path: str,
     key: str,

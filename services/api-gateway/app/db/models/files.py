@@ -17,6 +17,7 @@ class File(Base):
     file_type = Column(String, nullable=False)
     original_name = Column(String, nullable=False)
     storage_path = Column(String, nullable=False)
+    storage_url = Column(String, nullable=True)
     mime_type = Column(String)
     size_bytes = Column(BigInteger)
     status = Column(String, nullable=False, server_default=text("'uploading'"))
