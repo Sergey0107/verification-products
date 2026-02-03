@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any
 
 import httpx
@@ -149,6 +150,34 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
     }
 
     items: list[dict] = []
+
+    if len(tz_products) == 1 and len(passport_products) > 1:
+        tz_baseline = tz_products[0]
+        tz_baseline_name = tz_baseline.get("product_name") or "Неизвестное изделие"
+        tz_chars_map = tz_map.get(tz_baseline_name, {})
+        tz_chars_list = tz_product_chars.get(tz_baseline_name, [])
+        for passport_product in passport_products:
+            product_name = passport_product.get("product_name") or "Неизвестное изделие"
+            passport_chars_map = passport_map.get(product_name, {})
+            passport_chars_list = passport_product_chars.get(product_name, [])
+            ordered_char_names = _ordered_characteristics(
+                tz_chars_list, passport_chars_list
+            )
+            for char_name in ordered_char_names:
+                tz_entry = tz_chars_map.get(char_name, {})
+                passport_entry = passport_chars_map.get(char_name, {})
+                items.append(
+                    {
+                        "product_name": product_name,
+                        "characteristic": char_name,
+                        "tz_value": tz_entry.get("value"),
+                        "passport_value": passport_entry.get("value"),
+                        "tz_references": tz_entry.get("references", []),
+                        "passport_references": passport_entry.get("references", []),
+                    }
+                )
+        return items
+
     for product in ordered_products:
         product_name = product.get("product_name") or "Неизвестное изделие"
         tz_chars_map = tz_map.get(product_name, {})
@@ -182,6 +211,8 @@ def _chunk(items: list[dict], size: int) -> list[list[dict]]:
 
 
 def _compare_chunk(items: list[dict]) -> dict:
+    if not items:
+        return {"comparisons": [], "summary": ""}
     prompt_payload = _get_prompt()
     prompt_text = prompt_payload.get("prompt", "")
     schema = prompt_payload.get("schema", {})
@@ -205,7 +236,7 @@ def _compare_chunk(items: list[dict]) -> dict:
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
         ],
-        "temperature": 0.2,
+        "temperature": 0.0,
         "response_format": {"type": "json_object"},
     }
 
@@ -229,6 +260,44 @@ def _compare_chunk(items: list[dict]) -> dict:
         raise CompareParseError(str(exc), content)
 
 
+def _repair_json(raw_text: str, schema: dict) -> dict:
+    system_message = (
+        "Ты — валидатор JSON. Преобразуй входной текст в валидный JSON, "
+        "строго соответствующий схеме. Верни ТОЛЬКО JSON без пояснений."
+    )
+    user_message = json.dumps(
+        {"schema": schema, "raw": raw_text},
+        ensure_ascii=False,
+    )
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+        resp = client.post(
+            f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    return _extract_json(content)
+
+
 def compare_json(tz_data: dict, passport_data: dict) -> dict:
     items = _build_comparison_items(tz_data, passport_data)
     if not items:
@@ -243,9 +312,19 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
 
     all_comparisons: list[dict] = []
     summaries: list[str] = []
+    debug_chunk: dict | None = None
 
     for chunk_items in chunks:
-        result = _compare_chunk(chunk_items)
+        if not chunk_items:
+            continue
+        try:
+            result = _compare_chunk(chunk_items)
+        except CompareParseError as exc:
+            try:
+                result = _repair_json(exc.raw, _get_prompt().get("schema", {}))
+            except Exception:
+                result = {"comparisons": [], "summary": ""}
+
         comparisons = result.get("comparisons", [])
         if not isinstance(comparisons, list):
             comparisons = []
@@ -272,6 +351,14 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
                     f"{item.get('product_name')} — {item.get('characteristic')}"
                 )
         all_comparisons.extend(comparisons)
+        if debug_chunk is None:
+            debug_chunk = {
+                "input_items": chunk_items,
+                "comparisons": comparisons,
+            }
+        delay_seconds = settings.COMPARE_CHUNK_DELAY_SECONDS
+        if delay_seconds and delay_seconds > 0:
+            time.sleep(delay_seconds)
         summary = result.get("summary")
         if isinstance(summary, str) and summary.strip():
             summaries.append(summary.strip())
@@ -280,8 +367,11 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
         item.get("is_match") is True for item in all_comparisons
     )
     summary_text = " ".join(summaries).strip()
-    return {
+    result_payload = {
         "match": match_value,
         "summary": summary_text,
         "comparisons": all_comparisons,
     }
+    if debug_chunk is not None:
+        result_payload["debug_chunk"] = debug_chunk
+    return result_payload
