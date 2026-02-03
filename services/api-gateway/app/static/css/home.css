@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --bg: #f6f4f0;
   --card: #ffffff;
   --ink: #2b2b2b;
@@ -9,7 +9,9 @@
   --accent-strong: #2f5e52;
   --warning: #f3c243;
   --success: #4a9a5c;
+  --danger: #c34343;
   --shadow: 0 12px 30px rgba(24, 24, 24, 0.08);
+  --shadow-soft: 0 10px 24px rgba(24, 24, 24, 0.08);
   --radius-lg: 18px;
   --radius-md: 12px;
 }
@@ -23,12 +25,14 @@ body {
   font-family: "Montserrat", "Segoe UI", sans-serif;
   color: var(--ink);
   background: radial-gradient(circle at top left, #fdfbf7 0%, #f6f4f0 45%, #eee9e1 100%);
+  min-height: 100vh;
 }
 
 .page {
-  max-width: 980px;
-  margin: 48px auto;
-  padding: 0 24px 64px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 32px clamp(20px, 4vw, 64px) 72px;
 }
 
 .page-header {
@@ -36,7 +40,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 28px;
+  margin-bottom: 32px;
+  animation: rise 0.6s ease both;
 }
 
 .actions {
@@ -57,7 +62,7 @@ body {
   margin: 0;
   font-family: "Unbounded", "Montserrat", sans-serif;
   font-weight: 600;
-  font-size: 32px;
+  font-size: clamp(28px, 3vw, 36px);
 }
 
 .upload-form {
@@ -106,6 +111,7 @@ input[type="file"] {
   background: var(--card);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
+  animation: rise 0.6s ease both;
 }
 
 .meta {
@@ -179,7 +185,7 @@ input[type="file"] {
 }
 
 .status-error {
-  color: #c34343;
+  color: var(--danger);
 }
 
 .btn {
@@ -213,6 +219,17 @@ input[type="file"] {
   color: var(--ink);
 }
 
+.btn-small {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.btn[disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+}
+
 .btn-icon {
   width: 36px;
   height: 36px;
@@ -244,7 +261,7 @@ input[type="file"] {
 .modal-card {
   position: relative;
   z-index: 1;
-  width: min(640px, calc(100% - 32px));
+  width: min(700px, calc(100% - 32px));
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -266,6 +283,118 @@ input[type="file"] {
   font-size: 22px;
 }
 
+.modal-body {
+  display: grid;
+  gap: 12px;
+}
+
+.modal-body .field {
+  display: grid;
+  gap: 6px;
+}
+
+.modal-body textarea {
+  min-height: 120px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+  background: #faf8f4;
+}
+
+.table-wrapper {
+  margin-top: 18px;
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.table thead th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 14px 16px;
+  background: #f7f5f1;
+  border-bottom: 1px solid var(--line);
+}
+
+.table tbody td {
+  padding: 14px 16px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  word-break: break-word;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.cell-strong {
+  font-weight: 600;
+}
+
+.cell-muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.checkbox input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 @media (max-width: 900px) {
   .page-header {
     flex-direction: column;
@@ -279,5 +408,10 @@ input[type="file"] {
 
   .input-row {
     grid-template-columns: 1fr;
+  }
+
+  .table {
+    font-size: 12px;
+    min-width: 1100px;
   }
 }

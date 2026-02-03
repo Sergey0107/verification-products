@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "amqp://guest:guest@rabbitmq:5672//"
     CELERY_RESULT_BACKEND: str = "rpc://"
     REQUEST_TIMEOUT_SECONDS: int = 120
+    COMPARE_CHUNK_SIZE: int = 40
 
 
 settings = Settings()

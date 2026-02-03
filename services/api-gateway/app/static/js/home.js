@@ -24,20 +24,29 @@ const renderItem = (item) => {
       <div class="meta">
         <p class="meta-label">Статус:</p>
         <p class="status status-${item.status_key}" data-status>
-          ${item.status_key === 'in-progress' ? '<span class="spinner" aria-hidden="true"></span>' : ''}
+         ${item.status_key !== 'ready' && item.status_key !== 'failed'
+  ? '<span class="spinner" aria-hidden="true"></span>'
+  : ''
+}
+
           ${item.status}
         </p>
       </div>
-      <button class="btn btn-outline" type="button" data-open-analysis>Открыть</button>
+      <a class="btn btn-outline" href="/analyses/${item.analysis_id}">Открыть</a>
     </article>
   `;
 };
+
+let lastItemsKey = "";
 
 const refreshList = async () => {
   if (!list) return;
   const response = await fetch('/api/analyses', { credentials: 'same-origin' });
   if (!response.ok) return;
   const data = await response.json();
+  const nextKey = JSON.stringify(data.items || []);
+  if (nextKey === lastItemsKey) return;
+  lastItemsKey = nextKey;
   list.innerHTML = data.items.map(renderItem).join('');
 };
 
@@ -77,18 +86,6 @@ if (modal && openButton) {
       }
     });
   }
-}
-
-if (list) {
-  list.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-open-analysis]');
-    if (!target) return;
-    const card = target.closest('[data-analysis-id]');
-    if (!card) return;
-    const analysisId = card.getAttribute('data-analysis-id');
-    if (!analysisId) return;
-    window.location.assign(`/analyses/${analysisId}`);
-  });
 }
 
 refreshList();

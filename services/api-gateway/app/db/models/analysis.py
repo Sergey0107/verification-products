@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Boolean, DateTime, Text
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func, text
 from app.db.base import Base
 
@@ -34,7 +34,7 @@ class ComparisonRow(Base):
     tz_quote = Column(Text)
     passport_quote = Column(Text)
     llm_result = Column(Boolean)
-    user_result = Column(Boolean)
+    user_result = Column(Boolean, server_default=text("true"))
     note = Column(String)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -49,8 +49,7 @@ class UserEdit(Base):
         server_default=text("gen_random_uuid()"),
     )
     comparison_row_id = Column(UUID(as_uuid=True), nullable=False)
-    old_value = Column(JSONB)
-    new_value = Column(JSONB)
+    comment = Column(Text)
     edited_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 

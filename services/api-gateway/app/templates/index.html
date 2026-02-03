@@ -57,7 +57,7 @@
               {{ item.status }}
             </p>
           </div>
-          <button class="btn btn-outline" type="button" data-open-analysis>Открыть</button>
+          <a class="btn btn-outline" href="/analyses/{{ item.analysis_id }}">Открыть</a>
         </article>
         {% endfor %}
       </section>

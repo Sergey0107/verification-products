@@ -26,7 +26,7 @@
       </header>
 
       <section class="list">
-        <article class="list-item" style="grid-template-columns: 1fr 1fr 1fr;">
+        <article class="list-item" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
           <div class="meta">
             <p class="meta-label">Статус анализа:</p>
             <p class="status status-{{ status_key }}">
@@ -47,46 +47,118 @@
         </article>
       </section>
 
-      <section class="list" style="margin-top: 18px;">
-        {% for row in rows %}
-        <article class="list-item" style="grid-template-columns: 120px 1.2fr 1fr 1fr;">
-          <div class="meta">
-            <p class="meta-label">Совпадение</p>
-            {% if row.llm_result is not none %}
-            <p class="status status-{{ 'ready' if row.llm_result else 'error' }}">
-              {{ 'Совпадает' if row.llm_result else 'Не совпадает' }}
-            </p>
-            {% else %}
-            <p class="status status-in-progress">Неизвестно</p>
-            {% endif %}
-          </div>
-          <div class="meta">
-            <p class="meta-label">Характеристика</p>
-            <p class="meta-value">{{ row.characteristic }}</p>
-            {% if row.note %}
-            <p class="meta-label" style="margin-top: 6px;">Комментарий</p>
-            <p class="meta-value">{{ row.note }}</p>
-            {% endif %}
-          </div>
-          <div class="meta">
-            <p class="meta-label">ТЗ</p>
-            <p class="meta-value">{{ row.tz_value }}</p>
-            {% if row.tz_quote %}
-            <p class="meta-label" style="margin-top: 6px;">Цитата</p>
-            <p class="meta-value">{{ row.tz_quote }}</p>
-            {% endif %}
-          </div>
-          <div class="meta">
-            <p class="meta-label">Паспорт</p>
-            <p class="meta-value">{{ row.passport_value }}</p>
-            {% if row.passport_quote %}
-            <p class="meta-label" style="margin-top: 6px;">Цитата</p>
-            <p class="meta-value">{{ row.passport_quote }}</p>
-            {% endif %}
-          </div>
-        </article>
-        {% endfor %}
+      <section class="table-wrapper">
+        <div class="actions" style="padding: 16px; border-bottom: 1px solid var(--line); justify-content: flex-start; gap: 12px; flex-wrap: wrap;">
+          <button class="btn btn-primary btn-small" type="button" data-save-user-results disabled>
+            Сохранить оценки
+          </button>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th style="width: 130px;">Статус</th>
+              <th style="width: 200px;">Характеристика</th>
+              <th>ТЗ</th>
+              <th>Цитата ТЗ</th>
+              <th>Паспорт</th>
+              <th>Цитата паспорта</th>
+              <th style="width: 120px;">Оценка</th>
+              <th style="width: 150px;">Комментарий</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr
+              data-row-id="{{ row.id }}"
+              data-characteristic="{{ row.characteristic | e }}"
+              data-tz-value="{{ row.tz_value | e }}"
+              data-passport-value="{{ row.passport_value | e }}"
+              data-comment="{{ comment_map.get(row.id, '') | e }}"
+            >
+              <td>
+                {% if row.llm_result is not none %}
+                <p class="status status-{{ 'ready' if row.llm_result else 'error' }}">
+                  {{ 'Совпадает' if row.llm_result else 'Не совпадает' }}
+                </p>
+                {% else %}
+                <p class="status status-in-progress">Неизвестно</p>
+                {% endif %}
+              </td>
+              <td>
+                <div class="cell-strong">{{ row.characteristic }}</div>
+                {% if row.note %}
+                <div class="cell-muted" style="margin-top: 6px;">{{ row.note }}</div>
+                {% endif %}
+              </td>
+              <td>{{ row.tz_value }}</td>
+              <td class="cell-muted">{{ row.tz_quote }}</td>
+              <td>{{ row.passport_value }}</td>
+              <td class="cell-muted">{{ row.passport_quote }}</td>
+              <td>
+                <label class="checkbox">
+                  <input
+                    type="checkbox"
+                    data-user-result
+                    {% if row.user_result is not false %}checked{% endif %}
+                  />
+                  <span>Да</span>
+                </label>
+              </td>
+              <td>
+                <button class="btn btn-outline btn-small" type="button" data-open-comment>
+                  Комментарий
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </section>
+
+      <section class="actions" style="margin-top: 18px; flex-wrap: wrap;">
+        <a class="btn btn-outline btn-small" href="/api/analyses/{{ analysis.id }}/extraction/tz" target="_blank" rel="noopener">
+          Извлеченные данные ТЗ
+        </a>
+        <a class="btn btn-outline btn-small" href="/api/analyses/{{ analysis.id }}/extraction/passport" target="_blank" rel="noopener">
+          Извлеченные данные Паспорт
+        </a>
+        <a class="btn btn-outline btn-small" href="/api/analyses/{{ analysis.id }}/comparison" target="_blank" rel="noopener">
+          Данные сравнения
+        </a>
+      </section>
+
+      <div class="modal" data-comment-modal hidden>
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="comment-title">
+          <header class="modal-header">
+            <h2 id="comment-title" class="modal-title">Комментарий к характеристике</h2>
+            <button class="btn btn-outline btn-icon" type="button" data-close>✕</button>
+          </header>
+          <form class="modal-body" data-comment-form>
+            <div class="field">
+              <span class="field-label">Название характеристики</span>
+              <div class="meta-value" data-field="characteristic"></div>
+            </div>
+            <div class="field">
+              <span class="field-label">Старое значение (ТЗ)</span>
+              <div class="meta-value" data-field="tz_value"></div>
+            </div>
+            <div class="field">
+              <span class="field-label">Новое значение (Паспорт)</span>
+              <div class="meta-value" data-field="passport_value"></div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="comment_text">Комментарий</label>
+              <textarea id="comment_text" name="comment" required></textarea>
+            </div>
+            <div class="actions">
+              <span class="pill" data-comment-status hidden>Сохранено</span>
+              <button class="btn btn-primary" type="submit">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </main>
+    <script src="/static/js/analysis_detail.js"></script>
   </body>
 </html>

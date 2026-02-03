@@ -2,10 +2,13 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.analysis import Analysis
+from app.db.models.extraction_results import ExtractionResult
+from app.db.models.comparison_jobs import ComparisonJob
 from app.db.models.files import File as FileModel
 from app.db.session import get_db
 
@@ -91,3 +94,39 @@ async def set_status(analysis_id: str, status: str, db: AsyncSession = Depends(g
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/analyses/{analysis_id}/extraction/{file_type}")
+async def get_extraction(
+    analysis_id: str, file_type: str, db: AsyncSession = Depends(get_db)
+):
+    if file_type not in {"tz", "passport"}:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    try:
+        analysis_uuid = UUID(analysis_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    result = await db.execute(
+        select(ExtractionResult)
+        .where(ExtractionResult.analysis_id == analysis_uuid)
+        .where(ExtractionResult.file_type == file_type)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(content=row.payload)
+
+
+@router.get("/analyses/{analysis_id}/comparison")
+async def get_comparison(analysis_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        analysis_uuid = UUID(analysis_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    result = await db.execute(
+        select(ComparisonJob).where(ComparisonJob.analysis_id == analysis_uuid)
+    )
+    job = result.scalar_one_or_none()
+    if job is None or job.result is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(content=job.result)

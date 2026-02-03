@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user_optional
 from app.api.analyses import build_analysis_items, _status_key, _status_label
-from app.db.models.analysis import Analysis, ComparisonRow
+from app.db.models.analysis import Analysis, ComparisonRow, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
 
@@ -76,6 +76,28 @@ async def analysis_detail(analysis_id: str, request: Request, db: AsyncSession =
         select(ComparisonRow).where(ComparisonRow.analysis_id == analysis.id)
     )
     rows = rows_result.scalars().all()
+    comment_map: dict[object, str] = {}
+    if rows:
+        row_ids = [row.id for row in rows]
+        latest_subq = (
+            select(
+                UserEdit.comparison_row_id,
+                func.max(UserEdit.edited_at).label("edited_at"),
+            )
+            .where(UserEdit.comparison_row_id.in_(row_ids))
+            .group_by(UserEdit.comparison_row_id)
+            .subquery()
+        )
+        latest_comments = await db.execute(
+            select(UserEdit.comparison_row_id, UserEdit.comment).join(
+                latest_subq,
+                (UserEdit.comparison_row_id == latest_subq.c.comparison_row_id)
+                & (UserEdit.edited_at == latest_subq.c.edited_at),
+            )
+        )
+        comment_map = {
+            row_id: (comment or "") for row_id, comment in latest_comments.all()
+        }
 
     processing_seconds = None
     if analysis.created_at and analysis.updated_at:
@@ -90,5 +112,6 @@ async def analysis_detail(analysis_id: str, request: Request, db: AsyncSession =
             "status_label": _status_label(analysis.status),
             "status_key": _status_key(analysis.status),
             "processing_seconds": processing_seconds,
+            "comment_map": comment_map,
         },
     )
