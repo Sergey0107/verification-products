@@ -3,82 +3,46 @@ PROMPTS = {
         "type": "tz",
         "title": "Technical specification (TZ)",
         "prompt": (
-            "You are an expert in technical documentation. Extract structured technical "
-            "characteristics from the provided document. Return ONLY valid JSON that "
-            "matches the given JSON Schema. If a field is not present, use null. "
-            "If multiple values are present, use an array. Do not add extra keys. "
-            "IMPORTANT: every characteristic MUST include its name. For every field "
-            "that represents a characteristic, return an object with: "
-            "{name, value, references}. The name must be the human-readable title "
-            "of the characteristic (e.g., 'Flow rate', 'Head', 'Power', 'Material')."
+            "Вы — эксперт по технической документации. Извлеките структурированные "
+            "технические характеристики из документа. Верните ТОЛЬКО валидный JSON, "
+            "строго соответствующий схеме. Не добавляйте лишних ключей и ничего не "
+            "выдумывайте. Извлекайте ВСЕ изделия и ВСЕ характеристики, которые есть "
+            "в документе. Результаты должны быть на русском языке.\n\n"
+            "ВАЖНО: каждая характеристика ДОЛЖНА иметь название. Для каждой "
+            "характеристики возвращайте объект: {name, value, references}, где "
+            "name — человекочитаемое название характеристики на русском "
+            "(например: \"Расход\", \"Напор\", \"Мощность\", \"Материал\")."
         ),
         "schema": {
             "type": "object",
-            "required": ["product", "technical", "source_pages"],
+            "required": ["products"],
             "properties": {
-                "product": {
-                    "type": "object",
-                    "required": ["name", "model"],
-                    "properties": {
-                        "name": {"type": ["string", "null"]},
-                        "model": {"type": ["string", "null"]},
-                        "manufacturer": {"type": ["string", "null"]},
-                        "purpose": {"type": ["string", "null"]},
-                    },
-                },
-                "technical": {
-                    "type": "object",
-                    "properties": {
-                        "performance": {
-                            "type": "object",
-                            "properties": {
-                                "flow_rate": {"type": ["string", "null"]},
-                                "head": {"type": ["string", "null"]},
-                                "power": {"type": ["string", "null"]},
-                                "efficiency": {"type": ["string", "null"]},
-                                "speed_rpm": {"type": ["string", "null"]},
-                            },
-                        },
-                        "dimensions": {
-                            "type": "object",
-                            "properties": {
-                                "length": {"type": ["string", "null"]},
-                                "width": {"type": ["string", "null"]},
-                                "height": {"type": ["string", "null"]},
-                                "weight": {"type": ["string", "null"]},
-                            },
-                        },
-                        "materials": {
-                            "anyOf": [
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "null"},
-                            ]
-                        },
-                        "temperature_range": {"type": ["string", "null"]},
-                        "pressure": {"type": ["string", "null"]},
-                        "voltage": {"type": ["string", "null"]},
-                        "ingress_protection": {"type": ["string", "null"]},
-                        "standards": {
-                            "anyOf": [
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "null"},
-                            ]
-                        },
-                        "operating_conditions": {"type": ["string", "null"]},
-                    },
-                },
-                "source_pages": {
+                "products": {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["field", "pages"],
+                        "required": ["product_name", "characteristics"],
                         "properties": {
-                            "field": {"type": "string"},
-                            "pages": {"type": "array", "items": {"type": "integer"}},
+                            "product_name": {"type": "string"},
+                            "product_model": {"type": ["string", "null"]},
+                            "characteristics": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["name", "value", "references"],
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "value": {"type": ["string", "null"]},
+                                        "references": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
-                "notes": {"type": ["string", "null"]},
             },
         },
     },
@@ -86,98 +50,45 @@ PROMPTS = {
         "type": "passport",
         "title": "Product passport",
         "prompt": (
-            "You are an expert in product passports. Extract structured data from the "
-            "document. Return ONLY valid JSON that matches the given JSON Schema. "
-            "If a field is not present, use null. If multiple values are present, use "
-            "an array. Do not add extra keys. "
-            "IMPORTANT: every characteristic MUST include its name. For every field "
-            "that represents a characteristic, return an object with: "
-            "{name, value, references}. The name must be the human-readable title "
-            "of the characteristic."
+            "Вы — эксперт по паспортам изделий. Извлеките структурированные данные "
+            "из документа. Верните ТОЛЬКО валидный JSON, строго соответствующий "
+            "схеме. Не добавляйте лишних ключей и ничего не выдумывайте. "
+            "Извлекайте ВСЕ изделия и ВСЕ характеристики, которые есть в документе. "
+            "Результаты должны быть на русском языке.\n\n"
+            "ВАЖНО: каждая характеристика ДОЛЖНА иметь название. Для каждой "
+            "характеристики возвращайте объект: {name, value, references}, где "
+            "name — человекочитаемое название характеристики на русском."
         ),
         "schema": {
             "type": "object",
-            "required": ["product", "identification", "technical", "source_pages"],
+            "required": ["products"],
             "properties": {
-                "product": {
-                    "type": "object",
-                    "required": ["name", "model"],
-                    "properties": {
-                        "name": {"type": ["string", "null"]},
-                        "model": {"type": ["string", "null"]},
-                        "manufacturer": {"type": ["string", "null"]},
-                        "serial_number": {"type": ["string", "null"]},
-                        "production_date": {"type": ["string", "null"]},
-                    },
-                },
-                "identification": {
-                    "type": "object",
-                    "properties": {
-                        "document_number": {"type": ["string", "null"]},
-                        "document_date": {"type": ["string", "null"]},
-                        "certificate_numbers": {
-                            "anyOf": [
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "null"},
-                            ]
-                        },
-                    },
-                },
-                "technical": {
-                    "type": "object",
-                    "properties": {
-                        "performance": {
-                            "type": "object",
-                            "properties": {
-                                "flow_rate": {"type": ["string", "null"]},
-                                "head": {"type": ["string", "null"]},
-                                "power": {"type": ["string", "null"]},
-                                "efficiency": {"type": ["string", "null"]},
-                                "speed_rpm": {"type": ["string", "null"]},
-                            },
-                        },
-                        "dimensions": {
-                            "type": "object",
-                            "properties": {
-                                "length": {"type": ["string", "null"]},
-                                "width": {"type": ["string", "null"]},
-                                "height": {"type": ["string", "null"]},
-                                "weight": {"type": ["string", "null"]},
-                            },
-                        },
-                        "materials": {
-                            "anyOf": [
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "null"},
-                            ]
-                        },
-                        "temperature_range": {"type": ["string", "null"]},
-                        "pressure": {"type": ["string", "null"]},
-                        "voltage": {"type": ["string", "null"]},
-                        "ingress_protection": {"type": ["string", "null"]},
-                        "standards": {
-                            "anyOf": [
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "null"},
-                            ]
-                        },
-                        "completeness": {"type": ["string", "null"]},
-                        "warranty": {"type": ["string", "null"]},
-                        "storage_conditions": {"type": ["string", "null"]},
-                    },
-                },
-                "source_pages": {
+                "products": {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["field", "pages"],
+                        "required": ["product_name", "characteristics"],
                         "properties": {
-                            "field": {"type": "string"},
-                            "pages": {"type": "array", "items": {"type": "integer"}},
+                            "product_name": {"type": "string"},
+                            "product_model": {"type": ["string", "null"]},
+                            "characteristics": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["name", "value", "references"],
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "value": {"type": ["string", "null"]},
+                                        "references": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
-                "notes": {"type": ["string", "null"]},
             },
         },
     },
@@ -185,37 +96,43 @@ PROMPTS = {
         "type": "comparison",
         "title": "Compare TZ vs Passport",
         "prompt": (
-            "You are a technical expert. Compare the technical characteristics in the "
-            "TZ JSON with the Passport JSON. Use a flexible, human-like comparison: "
-            "allow minor wording differences, unit variations, rounding, and synonyms. "
-            "Decide if the passport matches the TZ. Return ONLY valid JSON matching the "
-            "schema. Do not wrap the JSON in markdown or code fences. If a field cannot "
-            "be compared, mark it as 'unknown'."
+            "Вы — технический эксперт. Сравните характеристики из JSON ТЗ и JSON паспорта. "
+            "Сравнение должно быть гибким: допускайте различия формулировок, единиц, "
+            "округления и синонимы. НИЧЕГО не выдумывайте — только на основе данных. "
+            "Верните ТОЛЬКО валидный JSON по схеме, без markdown/код‑фенсов. "
+            "Если хотя бы одна характеристика не совпадает — match=false. "
+            "Результат на русском языке.\n\n"
+            "Для каждой сравниваемой характеристики верните: название, значение из паспорта, "
+            "значение из ТЗ, цитаты из документов (две строки: из ТЗ и из паспорта)."
         ),
         "schema": {
             "type": "object",
-            "required": ["match", "confidence", "summary", "mismatches"],
+            "required": ["match", "summary", "comparisons"],
             "properties": {
                 "match": {"type": "boolean"},
-                "confidence": {"type": "number"},
                 "summary": {"type": "string"},
-                "mismatches": {
+                "comparisons": {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["field", "tz_value", "passport_value", "severity"],
+                        "required": [
+                            "characteristic",
+                            "tz_value",
+                            "passport_value",
+                            "tz_quote",
+                            "passport_quote",
+                            "is_match",
+                        ],
                         "properties": {
-                            "field": {"type": "string"},
-                            "tz_value": {"type": "string"},
-                            "passport_value": {"type": "string"},
-                            "severity": {"type": "string"},
-                            "note": {"type": "string"},
+                            "characteristic": {"type": "string"},
+                            "tz_value": {"type": ["string", "null"]},
+                            "passport_value": {"type": ["string", "null"]},
+                            "tz_quote": {"type": ["string", "null"]},
+                            "passport_quote": {"type": ["string", "null"]},
+                            "is_match": {"type": "boolean"},
+                            "note": {"type": ["string", "null"]},
                         },
                     },
-                },
-                "unknowns": {
-                    "type": "array",
-                    "items": {"type": "string"},
                 },
             },
         },

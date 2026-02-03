@@ -5,7 +5,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user_optional
-from app.api.analyses import build_analysis_items
+from app.api.analyses import build_analysis_items, _status_key, _status_label
+from app.db.models.analysis import Analysis, ComparisonRow
 from app.db.models.users import User
 from app.db.session import get_db
 
@@ -60,3 +61,34 @@ async def logout():
     response = RedirectResponse(url="/login", status_code=302)
     response.delete_cookie("access_token")
     return response
+
+
+@router.get("/analyses/{analysis_id}")
+async def analysis_detail(analysis_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Analysis).where(Analysis.id == analysis_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if analysis is None:
+        return RedirectResponse(url="/", status_code=302)
+
+    rows_result = await db.execute(
+        select(ComparisonRow).where(ComparisonRow.analysis_id == analysis.id)
+    )
+    rows = rows_result.scalars().all()
+
+    processing_seconds = None
+    if analysis.created_at and analysis.updated_at:
+        processing_seconds = int((analysis.updated_at - analysis.created_at).total_seconds())
+
+    return templates.TemplateResponse(
+        "analysis_detail.html",
+        {
+            "request": request,
+            "analysis": analysis,
+            "rows": rows,
+            "status_label": _status_label(analysis.status),
+            "status_key": _status_key(analysis.status),
+            "processing_seconds": processing_seconds,
+        },
+    )

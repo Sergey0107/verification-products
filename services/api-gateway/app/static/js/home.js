@@ -23,9 +23,12 @@ const renderItem = (item) => {
       </div>
       <div class="meta">
         <p class="meta-label">Статус:</p>
-        <p class="status status-${item.status_key}" data-status>${item.status}</p>
+        <p class="status status-${item.status_key}" data-status>
+          ${item.status_key === 'in-progress' ? '<span class="spinner" aria-hidden="true"></span>' : ''}
+          ${item.status}
+        </p>
       </div>
-      <button class="btn btn-outline" type="button">Открыть</button>
+      <button class="btn btn-outline" type="button" data-open-analysis>Открыть</button>
     </article>
   `;
 };
@@ -74,6 +77,18 @@ if (modal && openButton) {
       }
     });
   }
+}
+
+if (list) {
+  list.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-open-analysis]');
+    if (!target) return;
+    const card = target.closest('[data-analysis-id]');
+    if (!card) return;
+    const analysisId = card.getAttribute('data-analysis-id');
+    if (!analysisId) return;
+    window.location.assign(`/analyses/${analysisId}`);
+  });
 }
 
 refreshList();

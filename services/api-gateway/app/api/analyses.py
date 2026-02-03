@@ -16,6 +16,8 @@ def _status_label(status: str) -> str:
     mapping = {
         "processing_files": "обработка файлов",
         "files_uploaded": "файл загружен",
+        "extracting_data": "извлечение данных",
+        "analyzing_data": "анализ данных",
         "ready": "готово",
         "failed": "ошибка",
     }
@@ -25,9 +27,11 @@ def _status_label(status: str) -> str:
 def _status_key(status: str) -> str:
     mapping = {
         "processing_files": "in-progress",
-        "files_uploaded": "ready",
+        "files_uploaded": "in-progress",
+        "extracting_data": "in-progress",
+        "analyzing_data": "in-progress",
         "ready": "ready",
-        "failed": "in-progress",
+        "failed": "error",
     }
     return mapping.get(status, "in-progress")
 

@@ -50,9 +50,14 @@
           </div>
           <div class="meta">
             <p class="meta-label">Статус:</p>
-            <p class="status status-{{ item.status_key }}" data-status>{{ item.status }}</p>
+            <p class="status status-{{ item.status_key }}" data-status>
+              {% if item.status_key == 'in-progress' %}
+              <span class="spinner" aria-hidden="true"></span>
+              {% endif %}
+              {{ item.status }}
+            </p>
           </div>
-          <button class="btn btn-outline" type="button">Открыть</button>
+          <button class="btn btn-outline" type="button" data-open-analysis>Открыть</button>
         </article>
         {% endfor %}
       </section>

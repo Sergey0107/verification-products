@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Результаты анализа</title>
+    <link rel="stylesheet" href="/static/css/home.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&family=Unbounded:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Детали анализа</p>
+          <h1 class="title">Результаты сравнения</h1>
+        </div>
+        <div class="actions">
+          <a class="btn btn-outline" href="/">Назад</a>
+          <a class="btn btn-outline" href="/logout">Выйти</a>
+        </div>
+      </header>
+
+      <section class="list">
+        <article class="list-item" style="grid-template-columns: 1fr 1fr 1fr;">
+          <div class="meta">
+            <p class="meta-label">Статус анализа:</p>
+            <p class="status status-{{ status_key }}">
+              {% if status_key == 'in-progress' %}
+              <span class="spinner" aria-hidden="true"></span>
+              {% endif %}
+              {{ status_label }}
+            </p>
+          </div>
+          <div class="meta">
+            <p class="meta-label">Создан:</p>
+            <p class="meta-value">{{ analysis.created_at }}</p>
+          </div>
+          <div class="meta">
+            <p class="meta-label">Время обработки (сек):</p>
+            <p class="meta-value">{{ processing_seconds or "" }}</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="list" style="margin-top: 18px;">
+        {% for row in rows %}
+        <article class="list-item" style="grid-template-columns: 120px 1.2fr 1fr 1fr;">
+          <div class="meta">
+            <p class="meta-label">Совпадение</p>
+            {% if row.llm_result is not none %}
+            <p class="status status-{{ 'ready' if row.llm_result else 'error' }}">
+              {{ 'Совпадает' if row.llm_result else 'Не совпадает' }}
+            </p>
+            {% else %}
+            <p class="status status-in-progress">Неизвестно</p>
+            {% endif %}
+          </div>
+          <div class="meta">
+            <p class="meta-label">Характеристика</p>
+            <p class="meta-value">{{ row.characteristic }}</p>
+            {% if row.note %}
+            <p class="meta-label" style="margin-top: 6px;">Комментарий</p>
+            <p class="meta-value">{{ row.note }}</p>
+            {% endif %}
+          </div>
+          <div class="meta">
+            <p class="meta-label">ТЗ</p>
+            <p class="meta-value">{{ row.tz_value }}</p>
+            {% if row.tz_quote %}
+            <p class="meta-label" style="margin-top: 6px;">Цитата</p>
+            <p class="meta-value">{{ row.tz_quote }}</p>
+            {% endif %}
+          </div>
+          <div class="meta">
+            <p class="meta-label">Паспорт</p>
+            <p class="meta-value">{{ row.passport_value }}</p>
+            {% if row.passport_quote %}
+            <p class="meta-label" style="margin-top: 6px;">Цитата</p>
+            <p class="meta-value">{{ row.passport_quote }}</p>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </section>
+    </main>
+  </body>
+</html>

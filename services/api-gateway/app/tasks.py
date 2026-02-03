@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.celery_app import celery_app
@@ -94,6 +94,15 @@ def extract_file(
                 session.commit()
 
                 if compare_job_id:
+                    session.execute(
+                        text("UPDATE analysis.analysis SET status=:status, updated_at=:updated_at WHERE id=:id"),
+                        {
+                            "status": "analyzing_data",
+                            "updated_at": datetime.utcnow(),
+                            "id": analysis_id,
+                        },
+                    )
+                    session.commit()
                     payload = {
                         "job_id": str(compare_job_id),
                         "analysis_id": analysis_id,
@@ -108,6 +117,17 @@ def extract_file(
     except Exception as exc:
         status = "failed" if self.request.retries >= self.max_retries else "retrying"
         mark_job_failed(job_id, str(exc), status)
+        if status == "failed":
+            with SessionLocal() as session:
+                session.execute(
+                    text("UPDATE analysis.analysis SET status=:status, updated_at=:updated_at WHERE id=:id"),
+                    {
+                        "status": "failed",
+                        "updated_at": datetime.utcnow(),
+                        "id": analysis_id,
+                    },
+                )
+                session.commit()
         update_comp_data(
             "extraction",
             {

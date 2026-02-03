@@ -130,7 +130,7 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         await db.execute(
             update(Analysis)
             .where(Analysis.id == analysis_id)
-            .values(status="files_uploaded", updated_at=datetime.utcnow())
+            .values(status="extracting_data", updated_at=datetime.utcnow())
         )
         files_result = await db.execute(
             select(FileModel).where(

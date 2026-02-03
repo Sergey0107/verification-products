@@ -154,12 +154,32 @@ input[type="file"] {
   background: currentColor;
 }
 
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  display: inline-block;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .status-in-progress {
   color: var(--warning);
 }
 
 .status-ready {
   color: var(--success);
+}
+
+.status-error {
+  color: #c34343;
 }
 
 .btn {

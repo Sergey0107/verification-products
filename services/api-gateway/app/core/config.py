@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     DOMAIN_ANALYZE_URL: str = "http://domain-analyze:8000"
     S3_ENDPOINT: str = "https://storage.yandexcloud.net"
     BUCKET_NAME: str = ""
-    EXTRACTION_TIMEOUT_SECONDS: int = 60
+    EXTRACTION_TIMEOUT_SECONDS: int = 600
     CELERY_BROKER_URL: str = "amqp://guest:guest@rabbitmq:5672//"
     CELERY_RESULT_BACKEND: str = "rpc://"
     EXTRACTION_DEBUG_DIR: str = "/tmp"
