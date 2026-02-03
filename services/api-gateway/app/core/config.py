@@ -1,7 +1,27 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _find_env_file() -> Path | None:
+    candidates = [Path.cwd() / "env" / ".env"]
+    for parent in Path(__file__).resolve().parents:
+        candidates.append(parent / "env" / ".env")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+ENV_FILE = _find_env_file()
 
 
 class Settings(BaseSettings):
+    model_config = (
+        SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
+        if ENV_FILE
+        else SettingsConfigDict()
+    )
     DATABASE_URL: str = "postgresql+asyncpg://analyzer:analyzer@localhost:5432/analyzer"
     SECRET_KEY: str = "change_me"
     ALGORITHM: str = "HS256"

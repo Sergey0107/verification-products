@@ -17,8 +17,6 @@ services:
       - prompt-registry
       - postgres
       - rabbitmq
-    environment:
-      DATABASE_URL: postgresql+asyncpg://analyzer:analyzer@analyzer-postgres:5432/analyzer
     volumes:
       - ./services/api-gateway/migration:/app/migration
       - ./comp_data:/comp_data
@@ -29,13 +27,6 @@ services:
       - "8001:8000"
     env_file:
       - ./env/.env
-    environment:
-      S3_ENDPOINT: https://storage.yandexcloud.net
-      S3_REGION: ru-central1
-      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
-      CELERY_RESULT_BACKEND: rpc://
-      TMP_DIR: /data/uploads
-      API_GATEWAY_URL: http://api-gateway:8000
     volumes:
       - filedata:/data
 
@@ -44,13 +35,6 @@ services:
     command: celery -A app.celery_app worker -l info -Q file_service
     env_file:
       - ./env/.env
-    environment:
-      S3_ENDPOINT: https://storage.yandexcloud.net
-      S3_REGION: ru-central1
-      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
-      CELERY_RESULT_BACKEND: rpc://
-      TMP_DIR: /data/uploads
-      API_GATEWAY_URL: http://api-gateway:8000
     volumes:
       - filedata:/data
     depends_on:
@@ -61,8 +45,6 @@ services:
     command: celery -A app.celery_app worker -l info -Q api_gateway
     env_file:
       - ./env/.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://analyzer:analyzer@analyzer-postgres:5432/analyzer
     volumes:
       - ./comp_data:/comp_data
     depends_on:
@@ -119,10 +101,8 @@ services:
   postgres:
     image: pgvector/pgvector:pg15
     container_name: analyzer-postgres
-    environment:
-      POSTGRES_DB: analyzer
-      POSTGRES_USER: analyzer
-      POSTGRES_PASSWORD: analyzer
+    env_file:
+      - ./env/.env
     ports:
       - "5432:5432"
     volumes:
