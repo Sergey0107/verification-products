@@ -41,13 +41,40 @@ def _unwrap_value(value: Any) -> Any:
     return value
 
 
+def _collect_products_from_pages(pages: Any) -> list[dict]:
+    if not isinstance(pages, list):
+        return []
+    products: list[dict] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        extracted_data = page.get("extracted_data")
+        if isinstance(extracted_data, dict):
+            page_products = extracted_data.get("products")
+            if isinstance(page_products, list):
+                products.extend(
+                    [item for item in page_products if isinstance(item, dict)]
+                )
+                continue
+            if any(
+                key in extracted_data
+                for key in ("product_name", "product_model", "characteristics")
+            ):
+                products.append(extracted_data)
+        elif isinstance(extracted_data, list):
+            products.extend([item for item in extracted_data if isinstance(item, dict)])
+    return products
+
+
 def _normalize_products(data: dict) -> list[dict]:
     if not isinstance(data, dict):
         return []
     extraction = data.get("extraction") if "extraction" in data else data
     if not isinstance(extraction, dict):
         return []
-    products = extraction.get("products", [])
+    products = extraction.get("products")
+    if not isinstance(products, list):
+        products = _collect_products_from_pages(extraction.get("pages"))
     if not isinstance(products, list):
         return []
     normalized = []

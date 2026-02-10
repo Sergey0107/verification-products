@@ -67,9 +67,8 @@ services:
     env_file:
       - ./env/.env
     environment:
-      ADE_ENV: ${ADE_ENV}
-      ADE_PARSE_MODEL: ${ADE_PARSE_MODEL:-dpt-2-latest}
-      ADE_EXTRACT_MODEL: ${ADE_EXTRACT_MODEL:-extract-latest}
+      DOCLING_PARSE_MODEL: ${DOCLING_PARSE_MODEL:-docling}
+      DOCLING_EXTRACT_MODEL: ${DOCLING_EXTRACT_MODEL:-docling}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
     # For local debugging only. Keep internal by default.

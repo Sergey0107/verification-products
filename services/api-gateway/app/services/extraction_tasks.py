@@ -9,6 +9,57 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _collect_products_from_extracted_data(extracted_data: object) -> list[dict]:
+    if isinstance(extracted_data, dict):
+        products = extracted_data.get("products")
+        if isinstance(products, list):
+            return [item for item in products if isinstance(item, dict)]
+        if any(
+            key in extracted_data
+            for key in ("product_name", "product_model", "characteristics")
+        ):
+            return [extracted_data]
+        return []
+    if isinstance(extracted_data, list):
+        return [item for item in extracted_data if isinstance(item, dict)]
+    return []
+
+
+def _dedupe_products(products: list[dict]) -> list[dict]:
+    seen: set[tuple[object, object]] = set()
+    unique: list[dict] = []
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        key = (product.get("product_name"), product.get("product_model"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(product)
+    return unique
+
+
+def _normalize_docling_extraction(result_payload: dict) -> None:
+    if not isinstance(result_payload, dict):
+        return
+    extraction = result_payload.get("extraction")
+    if not isinstance(extraction, dict):
+        return
+    pages = extraction.get("pages")
+    if not isinstance(pages, list):
+        return
+    if isinstance(extraction.get("products"), list):
+        return
+    products: list[dict] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        products.extend(
+            _collect_products_from_extracted_data(page.get("extracted_data"))
+        )
+    extraction["products"] = _dedupe_products(products)
+
+
 def build_s3_url(storage_key: str) -> str:
     endpoint = settings.S3_ENDPOINT.rstrip("/")
     bucket = settings.BUCKET_NAME.strip()
@@ -53,6 +104,7 @@ def run_extraction_task(
         )
         extract_resp.raise_for_status()
         result_payload = extract_resp.json()
+        _normalize_docling_extraction(result_payload)
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)
