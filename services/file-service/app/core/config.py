@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     BUCKET_NAME: str = ""
     AWS_KEY_ID: str = ""
     AWS_SECRET_KEY: str = ""
+    S3_PRESIGNED_TTL_SECONDS: int = 3600
     CELERY_BROKER_URL: str = "amqp://guest:guest@rabbitmq:5672//"
     CELERY_RESULT_BACKEND: str = "rpc://"
     TMP_DIR: str = "/data/uploads"

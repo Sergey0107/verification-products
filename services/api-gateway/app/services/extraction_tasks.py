@@ -96,6 +96,7 @@ def run_extraction_task(
             "file_url": file_url,
             "prompt": prompt_payload.get("prompt"),
             "schema": prompt_payload.get("schema"),
+            "backend": settings.EXTRACTION_BACKEND,
         }
 
         extract_resp = client.post(

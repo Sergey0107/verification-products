@@ -21,7 +21,9 @@ async def index(request: Request, db: AsyncSession = Depends(get_db)):
         return RedirectResponse(url="/login", status_code=302)
     items = await build_analysis_items(db)
     return templates.TemplateResponse(
-        "index.html", {"request": request, "items": items, "user": current_user}
+        request,
+        "index.html",
+        {"request": request, "items": items, "user": current_user},
     )
 
 
@@ -35,6 +37,7 @@ async def login_page(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(func.count(User.id)))
     has_users = (result.scalar_one() or 0) > 0
     return templates.TemplateResponse(
+        request,
         "login.html",
         {"request": request, "error": error, "show_register": not has_users},
     )
@@ -52,7 +55,9 @@ async def register_page(request: Request, db: AsyncSession = Depends(get_db)):
     error_code = request.query_params.get("error")
     error = error_code == "1"
     return templates.TemplateResponse(
-        "register.html", {"request": request, "error": error}
+        request,
+        "register.html",
+        {"request": request, "error": error},
     )
 
 
@@ -104,6 +109,7 @@ async def analysis_detail(analysis_id: str, request: Request, db: AsyncSession =
         processing_seconds = int((analysis.updated_at - analysis.created_at).total_seconds())
 
     return templates.TemplateResponse(
+        request,
         "analysis_detail.html",
         {
             "request": request,

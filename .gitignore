@@ -30,6 +30,7 @@ pip-wheel-metadata/
 build/
 dist/
 *.egg-info/
+comp_data/
 
 # OS
 .DS_Store

@@ -29,6 +29,8 @@ services:
       - ./env/.env
     volumes:
       - filedata:/data
+    depends_on:
+      - minio
 
   file-service-worker:
     build: ./services/file-service
@@ -39,6 +41,8 @@ services:
       - filedata:/data
     depends_on:
       - rabbitmq
+      - minio
+      - minio-init
 
   api-gateway-worker:
     build: ./services/api-gateway
@@ -63,17 +67,11 @@ services:
       - "8002:8000"
 
   extraction-service:
-    build: ../extraction-service
+    build: ../extraction
     env_file:
       - ./env/.env
-    environment:
-      DOCLING_PARSE_MODEL: ${DOCLING_PARSE_MODEL:-docling}
-      DOCLING_EXTRACT_MODEL: ${DOCLING_EXTRACT_MODEL:-docling}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
-    # For local debugging only. Keep internal by default.
-    # ports:
-    #   - "8005:8000"
+    ports:
+      - "8005:8000"
 
   domain-analyze:
     build: ./services/domain-analyze
@@ -97,6 +95,32 @@ services:
     ports:
       - "8004:8000"
 
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./env/.env
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc
+    env_file:
+      - ./env/.env
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do
+        sleep 2;
+      done;
+      mc mb --ignore-existing local/$$BUCKET_NAME;
+      exit 0;
+      "
+
   postgres:
     image: pgvector/pgvector:pg15
     container_name: analyzer-postgres
@@ -110,3 +134,4 @@ services:
 volumes:
   pgdata:
   filedata:
+  minio-data:

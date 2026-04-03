@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import boto3
+from botocore.config import Config
 
 from app.core.config import settings
 
@@ -12,6 +13,7 @@ def _client():
         region_name=settings.S3_REGION,
         aws_access_key_id=settings.AWS_KEY_ID,
         aws_secret_access_key=settings.AWS_SECRET_KEY,
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
 
 
@@ -28,8 +30,12 @@ def upload_file_path(file_path: str, key: str, content_type: str | None = None) 
         extra_args["ContentType"] = content_type
 
     client.upload_file(str(path), settings.BUCKET_NAME, key, ExtraArgs=extra_args or None)
-    url = f"{settings.S3_ENDPOINT.rstrip('/')}/{settings.BUCKET_NAME}/{key}"
-    return {"bucket": settings.BUCKET_NAME, "key": key, "url": url}
+    presigned_url = client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.BUCKET_NAME, "Key": key},
+        ExpiresIn=settings.S3_PRESIGNED_TTL_SECONDS,
+    )
+    return {"bucket": settings.BUCKET_NAME, "key": key, "url": presigned_url}
 
 
 def download_file_path(key: str, target_path: str) -> str:
