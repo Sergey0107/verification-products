@@ -6,82 +6,85 @@
     <title>База знаний: {{ project.title }}</title>
     <style>
       :root {
-        --bg: #f4efe6;
-        --paper: #fffdf8;
-        --ink: #1e2329;
-        --muted: #5f6773;
-        --line: #dfd6c8;
-        --soft: #efe7db;
+        --bg: #f3efe8;
+        --surface: rgba(255, 252, 247, 0.92);
+        --surface-strong: #fffdf9;
+        --surface-soft: #f8f2e8;
+        --line: rgba(56, 62, 72, 0.14);
+        --line-strong: rgba(56, 62, 72, 0.2);
+        --ink: #1f2933;
+        --muted: #667085;
+        --danger: #b42318;
         --accent: {% if project_key == "technical_compliance" %}#b6621f{% else %}#0f766e{% endif %};
-        --accent-soft: {% if project_key == "technical_compliance" %}#fff1e7{% else %}#e8f7f5{% endif %};
+        --accent-deep: {% if project_key == "technical_compliance" %}#8a4816{% else %}#0b5c56{% endif %};
+        --accent-soft: {% if project_key == "technical_compliance" %}#fff2e7{% else %}#eaf8f5{% endif %};
+        --shadow: 0 20px 50px rgba(31, 41, 51, 0.08);
+        --radius-xl: 28px;
+        --radius-lg: 22px;
+        --radius-md: 16px;
+        --radius-sm: 12px;
       }
 
       * { box-sizing: border-box; }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
       body {
         margin: 0;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, rgba(255,255,255,0.9), transparent 30%),
-          linear-gradient(180deg, #f8f3eb 0%, #f2ebdf 100%);
+          radial-gradient(circle at top left, rgba(255,255,255,0.92), transparent 26%),
+          linear-gradient(180deg, #f8f4ed 0%, #f1ece3 100%);
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       }
+
+      a {
+        color: inherit;
+      }
+
       .page {
-        max-width: 1440px;
+        max-width: 1520px;
         margin: 0 auto;
         padding: 28px;
       }
+
       .hero {
         display: grid;
-        grid-template-columns: 1.6fr 1fr;
+        grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
         gap: 20px;
-        align-items: start;
+        align-items: stretch;
       }
-      .hero-card, .card {
-        background: rgba(255, 253, 248, 0.96);
-        border: 1px solid rgba(95, 103, 115, 0.14);
-        border-radius: 24px;
-        box-shadow: 0 18px 50px rgba(30, 35, 41, 0.08);
+
+      .hero-card,
+      .section-card,
+      .entity-card,
+      .info-card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-xl);
+        box-shadow: var(--shadow);
       }
+
       .hero-card {
         padding: 28px;
       }
-      .hero h1 {
-        margin: 0 0 12px;
+
+      .hero-card h1 {
+        margin: 12px 0 14px;
         font-family: "Iowan Old Style", "Palatino Linotype", serif;
-        font-size: 40px;
+        font-size: 42px;
         line-height: 1.04;
       }
-      .hero p {
+
+      .hero-card p {
         margin: 0;
         color: var(--muted);
+        line-height: 1.65;
         font-size: 16px;
-        line-height: 1.6;
       }
-      .hero-side {
-        padding: 24px;
-        background: linear-gradient(180deg, var(--accent-soft), rgba(255,255,255,0.8));
-      }
-      .tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin: 18px 0 0;
-      }
-      .tab {
-        text-decoration: none;
-        color: var(--ink);
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 10px 16px;
-        font-size: 14px;
-        font-weight: 600;
-      }
-      .tab.active {
-        background: var(--accent);
-        color: #fff;
-        border-color: var(--accent);
-      }
+
       .pill {
         display: inline-flex;
         align-items: center;
@@ -89,176 +92,395 @@
         padding: 8px 12px;
         border-radius: 999px;
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-deep);
         font-size: 13px;
         font-weight: 700;
-        letter-spacing: 0.02em;
         text-transform: uppercase;
+        letter-spacing: 0.04em;
       }
-      .guide {
-        margin-top: 16px;
-        padding: 18px;
-        border-radius: 18px;
-        background: rgba(255,255,255,0.72);
-        border: 1px solid rgba(95, 103, 115, 0.12);
-      }
-      details.guide {
-        margin-top: 0;
-      }
-      details.guide summary {
-        cursor: pointer;
-        font-weight: 700;
-        color: var(--ink);
-        list-style: none;
-      }
-      details.guide summary::-webkit-details-marker {
-        display: none;
-      }
-      .guide h2, .section-title {
-        margin: 0 0 10px;
-        font-size: 20px;
-      }
-      .guide ol {
-        margin: 0;
-        padding-left: 20px;
-        color: var(--muted);
-        line-height: 1.6;
-      }
-      .stats {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 12px;
-        margin-top: 18px;
-      }
-      .stat {
-        padding: 16px;
-        border-radius: 18px;
-        background: rgba(255,255,255,0.72);
-        border: 1px solid rgba(95, 103, 115, 0.12);
-      }
-      .stat strong {
-        display: block;
-        font-size: 26px;
-        margin-bottom: 6px;
-      }
-      .layout {
-        display: grid;
-        grid-template-columns: 1.1fr 1.1fr 1.2fr;
-        gap: 20px;
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
         margin-top: 22px;
       }
-      .full-width {
-        margin-top: 20px;
-      }
-      .stack {
-        display: grid;
-        gap: 20px;
-        align-content: start;
-      }
-      .card {
-        padding: 22px;
-      }
-      .card h3 {
-        margin: 0 0 8px;
-        font-size: 20px;
-      }
-      .subtle {
-        color: var(--muted);
+
+      .tab {
+        display: inline-flex;
+        align-items: center;
+        min-height: 42px;
+        padding: 10px 16px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.88);
+        text-decoration: none;
         font-size: 14px;
-        line-height: 1.5;
+        font-weight: 600;
       }
-      form {
+
+      .tab.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .hero-side {
         display: grid;
-        gap: 12px;
+        gap: 18px;
       }
-      .grid-2 {
+
+      .info-card {
+        padding: 24px;
+      }
+
+      .stats {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
-      label {
-        display: block;
-        margin-bottom: 6px;
-        font-size: 13px;
-        color: var(--muted);
-        font-weight: 600;
-      }
-      input, textarea, select, button {
-        width: 100%;
-        border-radius: 16px;
+
+      .stat {
+        padding: 16px;
+        border-radius: var(--radius-md);
+        background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,255,255,0.74));
         border: 1px solid var(--line);
-        padding: 12px 14px;
-        font: inherit;
-        background: #fff;
       }
-      textarea {
-        min-height: 110px;
-        resize: vertical;
+
+      .stat strong {
+        display: block;
+        font-size: 28px;
+        line-height: 1;
+        margin-bottom: 8px;
       }
-      button {
-        border: none;
-        background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, black 30%));
-        color: #fff;
-        font-weight: 700;
-        cursor: pointer;
+
+      .muted {
+        color: var(--muted);
       }
+
+      .subtle {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .search-form {
+        display: grid;
+        gap: 12px;
+      }
+
       .search-row {
         display: grid;
         grid-template-columns: 1fr 180px;
         gap: 12px;
       }
-      table {
+
+      .section-list {
+        display: grid;
+        gap: 22px;
+        margin-top: 24px;
+      }
+
+      .section-card {
+        padding: 24px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .section-head h2 {
+        margin: 0 0 6px;
+        font-size: 24px;
+      }
+
+      .section-grid {
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .editor-card,
+      .list-card {
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: var(--surface-strong);
+        padding: 20px;
+      }
+
+      .editor-card {
+        position: sticky;
+        top: 18px;
+      }
+
+      .editor-card h3,
+      .list-card h3,
+      .info-card h3 {
+        margin: 0 0 8px;
+        font-size: 19px;
+      }
+
+      .entity-grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .entity-card {
+        padding: 18px;
+        border-radius: var(--radius-lg);
+      }
+
+      .entity-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 12px;
+      }
+
+      .entity-title {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .entity-meta {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .entity-preview {
+        margin: 0 0 14px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1px solid transparent;
+        background: var(--surface-soft);
+      }
+
+      .badge.active,
+      .badge.published {
+        background: #e9f7f5;
+        color: #0f766e;
+      }
+
+      .badge.inactive,
+      .badge.draft {
+        background: #fff5de;
+        color: #9a6700;
+      }
+
+      .badge.archived {
+        background: #eef2f6;
+        color: #475467;
+      }
+
+      .badge.system {
+        background: #eff4ff;
+        color: #3538cd;
+      }
+
+      form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .grid-2,
+      .grid-3 {
+        display: grid;
+        gap: 12px;
+      }
+
+      .grid-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea,
+      select,
+      button {
+        width: 100%;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 12px 14px;
+        font: inherit;
+        color: inherit;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: 2px solid color-mix(in srgb, var(--accent) 30%, white);
+        border-color: color-mix(in srgb, var(--accent) 55%, white);
+      }
+
+      textarea {
+        min-height: 108px;
+        resize: vertical;
+      }
+
+      .compact textarea {
+        min-height: 84px;
+      }
+
+      button {
+        border: none;
+        background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .ghost-button {
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line-strong);
+      }
+
+      .checkbox-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+      }
+
+      .check {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: var(--radius-sm);
+        background: var(--surface-soft);
+        border: 1px solid var(--line);
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .check input {
+        width: auto;
+        margin: 0;
+        padding: 0;
+      }
+
+      .mono {
+        font-family: "SFMono-Regular", "Menlo", monospace;
+        font-size: 12px;
+      }
+
+      .empty {
+        padding: 18px;
+        border-radius: var(--radius-md);
+        border: 1px dashed var(--line-strong);
+        color: var(--muted);
+        background: rgba(255,255,255,0.7);
+      }
+
+      details summary {
+        cursor: pointer;
+        font-weight: 700;
+        list-style: none;
+      }
+
+      details summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .summary-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 14px;
+        margin-top: 12px;
       }
-      th, td {
+
+      .summary-table th,
+      .summary-table td {
         text-align: left;
-        padding: 12px 8px;
-        border-bottom: 1px solid rgba(95, 103, 115, 0.12);
         vertical-align: top;
+        padding: 12px 10px;
+        border-bottom: 1px solid var(--line);
       }
-      th {
+
+      .summary-table th {
         color: var(--muted);
         font-size: 12px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
-      .muted {
+
+      .guide-list {
+        margin: 0;
+        padding-left: 20px;
         color: var(--muted);
+        line-height: 1.65;
       }
-      .table-wrap {
-        max-height: 420px;
-        overflow: auto;
+
+      .section-anchor {
+        position: relative;
+        top: -16px;
       }
-      .badge {
-        display: inline-block;
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: var(--soft);
-        color: var(--ink);
-        font-size: 12px;
-        font-weight: 700;
+
+      @media (max-width: 1240px) {
+        .hero,
+        .section-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .editor-card {
+          position: static;
+        }
       }
-      .badge.published { background: #e8f7f5; color: #0f766e; }
-      .badge.draft { background: #fff4df; color: #9a6700; }
-      .badge.archived { background: #f3f4f6; color: #4b5563; }
-      code {
-        white-space: pre-wrap;
-        background: #f7f4ee;
-        border-radius: 10px;
-        padding: 2px 6px;
-      }
-      .status-form {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-      }
-      .status-form select, .status-form button {
-        width: auto;
-      }
-      @media (max-width: 1180px) {
-        .hero, .layout { grid-template-columns: 1fr; }
+
+      @media (max-width: 760px) {
+        .page {
+          padding: 18px;
+        }
+
+        .search-row,
+        .grid-2,
+        .grid-3,
+        .stats {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-card h1 {
+          font-size: 34px;
+        }
+
+        .section-head,
+        .entity-head {
+          flex-direction: column;
+        }
       }
     </style>
   </head>
@@ -267,7 +489,7 @@
       <section class="hero">
         <div class="hero-card">
           <span class="pill">База знаний · {{ project.title }}</span>
-          <h1>Единый справочник</h1>
+          <h1>Управление сущностями проекта</h1>
           <p>{{ project.description }}</p>
           <div class="tabs">
             {% for key, item in projects.items() %}
@@ -275,45 +497,53 @@
             {% endfor %}
           </div>
         </div>
-        <div class="hero-card hero-side">
-          <h2 class="section-title">Что сейчас в базе</h2>
-          <div class="stats">
-            <div class="stat">
-              <strong>{{ sources|length }}</strong>
-              <span class="muted">источников</span>
+
+        <div class="hero-side">
+          <article class="info-card">
+            <h3>Что сейчас в базе</h3>
+            <div class="stats">
+              <div class="stat">
+                <strong>{{ sources|length }}</strong>
+                <span class="muted">нормативных источников</span>
+              </div>
+              <div class="stat">
+                <strong>{{ templates|length }}</strong>
+                <span class="muted">шаблонов письма</span>
+              </div>
+              <div class="stat">
+                <strong>{{ rules|length }}</strong>
+                <span class="muted">правил классификации</span>
+              </div>
+              <div class="stat">
+                <strong>{{ attributes|length }}</strong>
+                <span class="muted">канонических атрибутов</span>
+              </div>
             </div>
-            <div class="stat">
-              <strong>{{ templates|length }}</strong>
-              <span class="muted">шаблонов письма</span>
-            </div>
-            <div class="stat">
-              <strong>{{ rules|length }}</strong>
-              <span class="muted">правил классификации</span>
-            </div>
-            <div class="stat">
-              <strong>{{ attributes|length }}</strong>
-              <span class="muted">канонических сущностей</span>
-            </div>
-          </div>
-          <div class="guide">
-            <h2>Поиск по базе</h2>
-            <form method="get" action="/admin/{{ project_key }}">
+          </article>
+
+          <article class="info-card">
+            <h3>Поиск по базе</h3>
+            <form class="search-form" method="get" action="/admin/{{ project_key }}">
               <div class="search-row">
                 <input type="text" name="q" value="{{ q }}" placeholder="Например: перерасчет по временно отсутствующим" />
-                <button type="submit">Найти в базе</button>
+                <button type="submit">Найти</button>
               </div>
             </form>
-            <p class="subtle">Ищутся только осмысленные слова и фразы по материалам выбранного проекта. Одни символы и шум не считаются запросом.</p>
-          </div>
+            <p class="subtle">Поиск возвращает релевантные фрагменты, которые используются как контекст для retrieval и моделей.</p>
+          </article>
         </div>
       </section>
 
       {% if search_results %}
-      <section class="card" style="margin-top: 22px;">
-        <h3>Результаты поиска по базе знаний</h3>
-        <p class="subtle">Найдено {{ search_results|length }} фрагм. Они используются как контекст для моделей.</p>
-        <div class="table-wrap">
-          <table>
+      <section class="section-list">
+        <article class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Результаты поиска</h2>
+              <p class="subtle">Найдено {{ search_results|length }} фрагментов по текущему проекту.</p>
+            </div>
+          </div>
+          <table class="summary-table">
             <thead>
               <tr>
                 <th>Источник</th>
@@ -334,343 +564,595 @@
               {% endfor %}
             </tbody>
           </table>
-        </div>
+        </article>
       </section>
       {% endif %}
 
-      <section class="layout">
-        <div class="stack">
-          <article class="card">
-            <h3>Загрузить документ в базу</h3>
-            <p class="subtle">Подходит для законов, постановлений, внутренних регламентов, инструкций и технических материалов.</p>
-            <form action="/admin/forms/normative-upload" method="post" enctype="multipart/form-data">
-              <input type="hidden" name="project_key" value="{{ project_key }}" />
-              <div class="grid-2">
-                <div>
-                  <label>Код источника</label>
-                  <input name="source_key" required placeholder="например, government_354" />
+      <div class="section-list">
+        <span id="sources" class="section-anchor"></span>
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Нормативные источники</h2>
+              <p class="subtle">Сюда загружаются законы, постановления, регламенты, инструкции и другие документы, по которым строится retrieval.</p>
+            </div>
+          </div>
+          <div class="section-grid">
+            <article class="editor-card">
+              <h3>Добавить новый источник</h3>
+              <form action="/admin/forms/normative-upload" method="post" enctype="multipart/form-data">
+                <input type="hidden" name="project_key" value="{{ project_key }}" />
+                <div class="grid-2">
+                  <div>
+                    <label>Код источника</label>
+                    <input name="source_key" required placeholder="например, government_354" />
+                  </div>
+                  <div>
+                    <label>Тип документа</label>
+                    <input name="source_type" required placeholder="например, government_resolution" />
+                  </div>
                 </div>
-                <div>
-                  <label>Тип документа</label>
-                  <input name="source_type" required placeholder="например, government_resolution" />
-                </div>
-              </div>
-              <div>
-                <label>Название документа</label>
-                <input name="title" required placeholder="Полное понятное название" />
-              </div>
-              <div class="grid-2">
-                <div>
-                  <label>Юрисдикция или организация</label>
-                  <input name="jurisdiction" placeholder="например, RU или Название компании" />
-                </div>
-                <div>
-                  <label>Статус</label>
-                  <select name="status_value">
-                    <option value="draft">Черновик</option>
-                    <option value="published">Опубликовано</option>
-                    <option value="archived">Архив</option>
-                  </select>
-                </div>
-              </div>
-              <div class="grid-2">
-                <div>
-                  <label>Действует с</label>
-                  <input type="date" name="effective_from" />
-                </div>
-                <div>
-                  <label>Действует по</label>
-                  <input type="date" name="effective_to" />
-                </div>
-              </div>
-              <div>
-                <label>Краткое описание</label>
-                <textarea name="summary" placeholder="Коротко опишите, о чем этот документ и когда его использовать"></textarea>
-              </div>
-              <div>
-                <label>Дополнительные данные JSON</label>
-                <textarea name="metadata_json" placeholder='Например: {"подразделение":"юридический отдел"}'></textarea>
-              </div>
-              <div>
-                <label>Файл</label>
-                <input type="file" name="file" required />
-              </div>
-              <button type="submit">Загрузить и проиндексировать</button>
-            </form>
-          </article>
-
-          <article class="card">
-            <h3>Шаблон письма</h3>
-            <p class="subtle">Нужно для автоматической генерации ответных писем.</p>
-            <form action="/admin/forms/letter-template" method="post">
-              <input type="hidden" name="project_key" value="{{ project_key }}" />
-              <div class="grid-2">
-                <div>
-                  <label>Ключ шаблона</label>
-                  <input name="template_key" required placeholder="например, recalculation_svo" />
-                </div>
-                <div>
-                  <label>Версия</label>
-                  <input type="number" name="version" value="1" />
-                </div>
-              </div>
-              <div>
-                <label>Тема письма</label>
-                <textarea name="subject_template" required placeholder="Например: О рассмотрении обращения по лицевому счету {account_number}"></textarea>
-              </div>
-              <div>
-                <label>Текст письма</label>
-                <textarea name="paragraphs_text" required placeholder="Каждый абзац с новой строки"></textarea>
-              </div>
-              <div>
-                <label>Переменные</label>
-                <textarea name="variables_text" placeholder="Например:&#10;recipient_name&#10;recipient_address"></textarea>
-              </div>
-              <button type="submit">Сохранить шаблон</button>
-            </form>
-          </article>
-        </div>
-
-        <div class="stack">
-          <article class="card">
-            <h3>Правило классификации</h3>
-            <p class="subtle">Нужно, чтобы система понимала тип обращения или тип запроса.</p>
-            <form action="/admin/forms/classification-rule" method="post">
-              <input type="hidden" name="project_key" value="{{ project_key }}" />
-              <div class="grid-2">
-                <div>
-                  <label>Класс обращения</label>
-                  <input name="appeal_class" required placeholder="например, authority_prosecutor" />
-                </div>
-                <div>
-                  <label>Название правила</label>
-                  <input name="rule_name" required placeholder="Понятное короткое название" />
-                </div>
-              </div>
-              <div class="grid-2">
-                <div>
-                  <label>Тип заявителя</label>
-                  <input name="requester_type" placeholder="например, authority" />
-                </div>
-                <div>
-                  <label>Тип органа</label>
-                  <input name="authority_type" placeholder="например, prosecutor" />
-                </div>
-              </div>
-              <div class="grid-2">
-                <div>
-                  <label>Приоритет</label>
-                  <input type="number" name="priority" value="100" />
-                </div>
-                <div>
-                  <label>Версия</label>
-                  <input type="number" name="version" value="1" />
-                </div>
-              </div>
-              <div>
-                <label>Описание</label>
-                <textarea name="description" placeholder="Когда применять это правило"></textarea>
-              </div>
-              <div>
-                <label>Слова и фразы для распознавания</label>
-                <textarea name="match_terms_text" placeholder="По одному выражению на строку"></textarea>
-              </div>
-              <button type="submit">Сохранить правило</button>
-            </form>
-          </article>
-
-          <article class="card">
-            <h3>Каноническая сущность</h3>
-            <p class="subtle">Нужно для унификации полей и характеристик, которые модели должны искать в документах.</p>
-            <form action="/admin/forms/canonical-attribute" method="post">
-              <input type="hidden" name="project_key" value="{{ project_key }}" />
-              <div class="grid-2">
                 <div>
                   <label>Название</label>
-                  <input name="name" required placeholder="Например, Напряжение питания" />
+                  <input name="title" required placeholder="Полное понятное название документа" />
+                </div>
+                <div class="grid-2">
+                  <div>
+                    <label>Юрисдикция или организация</label>
+                    <input name="jurisdiction" placeholder="например, RU или Название компании" />
+                  </div>
+                  <div>
+                    <label>Статус</label>
+                    <select name="status_value">
+                      <option value="draft">Черновик</option>
+                      <option value="published">Опубликовано</option>
+                      <option value="archived">Архив</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div>
+                    <label>Действует с</label>
+                    <input type="date" name="effective_from" />
+                  </div>
+                  <div>
+                    <label>Действует по</label>
+                    <input type="date" name="effective_to" />
+                  </div>
                 </div>
                 <div>
-                  <label>Нормализованное название</label>
-                  <input name="normalized_name" required placeholder="например, напряжение питания" />
-                </div>
-              </div>
-              <div class="grid-2">
-                <div>
-                  <label>Единица измерения</label>
-                  <input name="unit" placeholder="например, В" />
+                  <label>Краткое описание</label>
+                  <textarea name="summary" placeholder="Коротко опишите, когда и для чего этот источник нужен"></textarea>
                 </div>
                 <div>
-                  <label>Тип значения</label>
-                  <input name="value_type" value="string" />
+                  <label>Дополнительные данные JSON</label>
+                  <textarea name="metadata_json" class="mono" placeholder='{"department":"legal"}'></textarea>
                 </div>
-              </div>
-              <div>
-                <label>Синонимы</label>
-                <textarea name="synonyms_text" placeholder="По одному синониму на строку"></textarea>
-              </div>
-              <button type="submit">Сохранить сущность</button>
-            </form>
-          </article>
-        </div>
+                <div>
+                  <label>Файл</label>
+                  <input type="file" name="file" required />
+                </div>
+                <button type="submit">Загрузить и проиндексировать</button>
+              </form>
+            </article>
 
-        <div class="stack">
-          <article class="card">
-            <h3>Документы проекта</h3>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Документ</th>
-                    <th>Статус</th>
-                    <th>Управление</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for item in sources %}
-                  <tr>
-                    <td>
-                      <strong>{{ item.title }}</strong><br />
-                      <span class="muted">{{ item.source_key }} · v{{ item.version }} · {{ item.source_type }}</span><br />
-                      <span class="muted">{{ item.file_name or "Файл не загружен" }}</span>
-                    </td>
-                    <td><span class="badge {{ item.status }}">{{ "Опубликовано" if item.status == "published" else "Черновик" if item.status == "draft" else "Архив" }}</span></td>
-                    <td>
-                      <form class="status-form" action="/admin/forms/source-status/{{ item.id }}" method="post">
-                        <input type="hidden" name="project_key" value="{{ project_key }}" />
+            <article class="list-card">
+              <h3>Все источники проекта</h3>
+              {% if sources %}
+              <div class="entity-grid">
+                {% for item in sources %}
+                <article class="entity-card compact">
+                  <div class="entity-head">
+                    <div>
+                      <h4 class="entity-title">{{ item.title }}</h4>
+                      <div class="entity-meta">
+                        {{ item.source_key }} · v{{ item.version }} · {{ item.source_type }}<br />
+                        {{ item.file_name or "Файл не загружен" }}
+                      </div>
+                    </div>
+                    <div class="badge-row">
+                      <span class="badge {{ item.status }}">{{ "Опубликовано" if item.status == "published" else "Черновик" if item.status == "draft" else "Архив" }}</span>
+                      {% if item.is_published %}<span class="badge published">В retrieval</span>{% endif %}
+                    </div>
+                  </div>
+                  {% if item.summary %}
+                  <p class="entity-preview">{{ item.summary }}</p>
+                  {% endif %}
+                  <form action="/admin/forms/normative-source/{{ item.id }}" method="post">
+                    <input type="hidden" name="project_key" value="{{ project_key }}" />
+                    <div class="grid-2">
+                      <div>
+                        <label>Код источника</label>
+                        <input name="source_key" value="{{ item.source_key }}" required />
+                      </div>
+                      <div>
+                        <label>Версия</label>
+                        <input type="number" name="version" value="{{ item.version }}" />
+                      </div>
+                    </div>
+                    <div class="grid-2">
+                      <div>
+                        <label>Название</label>
+                        <input name="title" value="{{ item.title }}" required />
+                      </div>
+                      <div>
+                        <label>Тип документа</label>
+                        <input name="source_type" value="{{ item.source_type }}" required />
+                      </div>
+                    </div>
+                    <div class="grid-3">
+                      <div>
+                        <label>Юрисдикция</label>
+                        <input name="jurisdiction" value="{{ item.jurisdiction or '' }}" />
+                      </div>
+                      <div>
+                        <label>Статус</label>
                         <select name="status_value">
                           <option value="draft" {% if item.status == "draft" %}selected{% endif %}>Черновик</option>
                           <option value="published" {% if item.status == "published" %}selected{% endif %}>Опубликовано</option>
                           <option value="archived" {% if item.status == "archived" %}selected{% endif %}>Архив</option>
                         </select>
-                        <button type="submit">Применить</button>
-                      </form>
-                    </td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </article>
+                      </div>
+                      <div>
+                        <label>Дата публикации в retrieval</label>
+                        <div class="check">
+                          <input type="checkbox" name="is_published" {% if item.is_published %}checked{% endif %} />
+                          <span>Включен в выдачу</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="grid-2">
+                      <div>
+                        <label>Действует с</label>
+                        <input type="date" name="effective_from" value="{{ item.effective_from.isoformat() if item.effective_from else '' }}" />
+                      </div>
+                      <div>
+                        <label>Действует по</label>
+                        <input type="date" name="effective_to" value="{{ item.effective_to.isoformat() if item.effective_to else '' }}" />
+                      </div>
+                    </div>
+                    <div>
+                      <label>Описание</label>
+                      <textarea name="summary">{{ item.summary or "" }}</textarea>
+                    </div>
+                    <div>
+                      <label>Metadata JSON</label>
+                      <textarea name="metadata_json" class="mono">{{ item.metadata_json | tojson(indent=2) }}</textarea>
+                    </div>
+                    <button type="submit">Сохранить изменения</button>
+                  </form>
+                </article>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="empty">Пока нет ни одного загруженного источника.</div>
+              {% endif %}
+            </article>
+          </div>
+        </section>
 
-          <article class="card">
-            <h3>Справочные сущности</h3>
-            <div class="table-wrap">
-              <table>
+        <span id="templates" class="section-anchor"></span>
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Шаблоны писем</h2>
+              <p class="subtle">Шаблоны теперь можно не только добавлять, но и редактировать прямо на этой странице.</p>
+            </div>
+          </div>
+          <div class="section-grid">
+            <article class="editor-card">
+              <h3>Добавить шаблон</h3>
+              <form action="/admin/forms/letter-template" method="post">
+                <input type="hidden" name="project_key" value="{{ project_key }}" />
+                <div class="grid-2">
+                  <div>
+                    <label>Ключ шаблона</label>
+                    <input name="template_key" required placeholder="например, recalculation_svo" />
+                  </div>
+                  <div>
+                    <label>Версия</label>
+                    <input type="number" name="version" value="1" />
+                  </div>
+                </div>
+                <div>
+                  <label>Тема письма</label>
+                  <textarea name="subject_template" required placeholder="Например: О рассмотрении обращения по лицевому счету {account_number}"></textarea>
+                </div>
+                <div>
+                  <label>Абзацы письма</label>
+                  <textarea name="paragraphs_text" required placeholder="Каждый абзац с новой строки"></textarea>
+                </div>
+                <div>
+                  <label>Переменные</label>
+                  <textarea name="variables_text" placeholder="По одной переменной на строку"></textarea>
+                </div>
+                <div class="checkbox-row">
+                  <label class="check"><input type="checkbox" name="is_active" checked /> <span>Активен</span></label>
+                  <label class="check"><input type="checkbox" name="is_published" checked /> <span>Опубликован</span></label>
+                </div>
+                <button type="submit">Сохранить шаблон</button>
+              </form>
+            </article>
+
+            <article class="list-card">
+              <h3>Все шаблоны проекта</h3>
+              {% if templates %}
+              <div class="entity-grid">
+                {% for item in templates %}
+                <article class="entity-card compact">
+                  <div class="entity-head">
+                    <div>
+                      <h4 class="entity-title">{{ item.template_key }}</h4>
+                      <div class="entity-meta">Версия {{ item.version }} · обновлен {{ item.updated_at }}</div>
+                    </div>
+                    <div class="badge-row">
+                      <span class="badge {% if item.is_active %}active{% else %}inactive{% endif %}">{{ "Активен" if item.is_active else "Выключен" }}</span>
+                      <span class="badge {% if item.is_published %}published{% else %}draft{% endif %}">{{ "Опубликован" if item.is_published else "Черновик" }}</span>
+                      {% if item.is_system %}<span class="badge system">Системный</span>{% endif %}
+                    </div>
+                  </div>
+                  <p class="entity-preview"><strong>Тема:</strong> {{ item.subject_template }}</p>
+                  <form action="/admin/forms/letter-template/{{ item.id }}" method="post">
+                    <input type="hidden" name="project_key" value="{{ project_key }}" />
+                    <div class="grid-2">
+                      <div>
+                        <label>Ключ шаблона</label>
+                        <input name="template_key" value="{{ item.template_key }}" required />
+                      </div>
+                      <div>
+                        <label>Версия</label>
+                        <input type="number" name="version" value="{{ item.version }}" />
+                      </div>
+                    </div>
+                    <div>
+                      <label>Тема письма</label>
+                      <textarea name="subject_template" required>{{ item.subject_template }}</textarea>
+                    </div>
+                    <div>
+                      <label>Абзацы письма</label>
+                      <textarea name="paragraphs_text" required>{{ item.paragraphs | join('\n') }}</textarea>
+                    </div>
+                    <div>
+                      <label>Переменные</label>
+                      <textarea name="variables_text">{{ item.variables | join('\n') }}</textarea>
+                    </div>
+                    <div class="checkbox-row">
+                      <label class="check"><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %} /> <span>Активен</span></label>
+                      <label class="check"><input type="checkbox" name="is_published" {% if item.is_published %}checked{% endif %} /> <span>Опубликован</span></label>
+                    </div>
+                    <button type="submit">Сохранить изменения</button>
+                  </form>
+                </article>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="empty">Пока нет ни одного шаблона письма.</div>
+              {% endif %}
+            </article>
+          </div>
+        </section>
+
+        <span id="rules" class="section-anchor"></span>
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Правила классификации</h2>
+              <p class="subtle">Правила для определения типа обращения, запроса или сценария письма.</p>
+            </div>
+          </div>
+          <div class="section-grid">
+            <article class="editor-card">
+              <h3>Добавить правило</h3>
+              <form action="/admin/forms/classification-rule" method="post">
+                <input type="hidden" name="project_key" value="{{ project_key }}" />
+                <div class="grid-2">
+                  <div>
+                    <label>Класс обращения</label>
+                    <input name="appeal_class" required placeholder="например, authority_prosecutor" />
+                  </div>
+                  <div>
+                    <label>Название правила</label>
+                    <input name="rule_name" required placeholder="Понятное короткое название" />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div>
+                    <label>Тип заявителя</label>
+                    <input name="requester_type" placeholder="например, authority" />
+                  </div>
+                  <div>
+                    <label>Тип органа</label>
+                    <input name="authority_type" placeholder="например, prosecutor" />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div>
+                    <label>Приоритет</label>
+                    <input type="number" name="priority" value="100" />
+                  </div>
+                  <div>
+                    <label>Версия</label>
+                    <input type="number" name="version" value="1" />
+                  </div>
+                </div>
+                <div>
+                  <label>Описание</label>
+                  <textarea name="description" placeholder="Когда применять это правило"></textarea>
+                </div>
+                <div>
+                  <label>Слова и фразы</label>
+                  <textarea name="match_terms_text" placeholder="По одному выражению на строку"></textarea>
+                </div>
+                <div class="checkbox-row">
+                  <label class="check"><input type="checkbox" name="is_active" checked /> <span>Активно</span></label>
+                </div>
+                <button type="submit">Сохранить правило</button>
+              </form>
+            </article>
+
+            <article class="list-card">
+              <h3>Все правила проекта</h3>
+              {% if rules %}
+              <div class="entity-grid">
+                {% for item in rules %}
+                <article class="entity-card compact">
+                  <div class="entity-head">
+                    <div>
+                      <h4 class="entity-title">{{ item.rule_name }}</h4>
+                      <div class="entity-meta">{{ item.appeal_class }} · приоритет {{ item.priority }} · версия {{ item.version }}</div>
+                    </div>
+                    <div class="badge-row">
+                      <span class="badge {% if item.is_active %}active{% else %}inactive{% endif %}">{{ "Активно" if item.is_active else "Выключено" }}</span>
+                      {% if item.is_system %}<span class="badge system">Системное</span>{% endif %}
+                    </div>
+                  </div>
+                  {% if item.description %}
+                  <p class="entity-preview">{{ item.description }}</p>
+                  {% endif %}
+                  <form action="/admin/forms/classification-rule/{{ item.id }}" method="post">
+                    <input type="hidden" name="project_key" value="{{ project_key }}" />
+                    <div class="grid-2">
+                      <div>
+                        <label>Класс обращения</label>
+                        <input name="appeal_class" value="{{ item.appeal_class }}" required />
+                      </div>
+                      <div>
+                        <label>Название правила</label>
+                        <input name="rule_name" value="{{ item.rule_name }}" required />
+                      </div>
+                    </div>
+                    <div class="grid-2">
+                      <div>
+                        <label>Тип заявителя</label>
+                        <input name="requester_type" value="{{ item.requester_type or '' }}" />
+                      </div>
+                      <div>
+                        <label>Тип органа</label>
+                        <input name="authority_type" value="{{ item.authority_type or '' }}" />
+                      </div>
+                    </div>
+                    <div class="grid-2">
+                      <div>
+                        <label>Приоритет</label>
+                        <input type="number" name="priority" value="{{ item.priority }}" />
+                      </div>
+                      <div>
+                        <label>Версия</label>
+                        <input type="number" name="version" value="{{ item.version }}" />
+                      </div>
+                    </div>
+                    <div>
+                      <label>Описание</label>
+                      <textarea name="description">{{ item.description or "" }}</textarea>
+                    </div>
+                    <div>
+                      <label>Слова и фразы</label>
+                      <textarea name="match_terms_text">{{ item.match_terms | join('\n') }}</textarea>
+                    </div>
+                    <div class="checkbox-row">
+                      <label class="check"><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %} /> <span>Активно</span></label>
+                    </div>
+                    <button type="submit">Сохранить изменения</button>
+                  </form>
+                </article>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="empty">Пока нет ни одного правила классификации.</div>
+              {% endif %}
+            </article>
+          </div>
+        </section>
+
+        <span id="attributes" class="section-anchor"></span>
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Канонические атрибуты</h2>
+              <p class="subtle">Справочник унифицированных характеристик и полей, которые модели должны искать в документах.</p>
+            </div>
+          </div>
+          <div class="section-grid">
+            <article class="editor-card">
+              <h3>Добавить атрибут</h3>
+              <form action="/admin/forms/canonical-attribute" method="post">
+                <input type="hidden" name="project_key" value="{{ project_key }}" />
+                <div class="grid-2">
+                  <div>
+                    <label>Название</label>
+                    <input name="name" required placeholder="Например, Напряжение питания" />
+                  </div>
+                  <div>
+                    <label>Нормализованное имя</label>
+                    <input name="normalized_name" required placeholder="например, напряжение питания" />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div>
+                    <label>Единица измерения</label>
+                    <input name="unit" placeholder="например, В" />
+                  </div>
+                  <div>
+                    <label>Тип значения</label>
+                    <input name="value_type" value="string" />
+                  </div>
+                </div>
+                <div>
+                  <label>Синонимы</label>
+                  <textarea name="synonyms_text" placeholder="По одному синониму на строку"></textarea>
+                </div>
+                <div class="checkbox-row">
+                  <label class="check"><input type="checkbox" name="is_active" checked /> <span>Активен</span></label>
+                </div>
+                <button type="submit">Сохранить атрибут</button>
+              </form>
+            </article>
+
+            <article class="list-card">
+              <h3>Все атрибуты проекта</h3>
+              {% if attributes %}
+              <div class="entity-grid">
+                {% for item in attributes %}
+                <article class="entity-card compact">
+                  <div class="entity-head">
+                    <div>
+                      <h4 class="entity-title">{{ item.name }}</h4>
+                      <div class="entity-meta">{{ item.normalized_name }} · {{ item.value_type }}{% if item.unit %} · {{ item.unit }}{% endif %}</div>
+                    </div>
+                    <div class="badge-row">
+                      <span class="badge {% if item.is_active %}active{% else %}inactive{% endif %}">{{ "Активен" if item.is_active else "Выключен" }}</span>
+                    </div>
+                  </div>
+                  <form action="/admin/forms/canonical-attribute/{{ item.id }}" method="post">
+                    <input type="hidden" name="project_key" value="{{ project_key }}" />
+                    <div class="grid-2">
+                      <div>
+                        <label>Название</label>
+                        <input name="name" value="{{ item.name }}" required />
+                      </div>
+                      <div>
+                        <label>Нормализованное имя</label>
+                        <input name="normalized_name" value="{{ item.normalized_name }}" required />
+                      </div>
+                    </div>
+                    <div class="grid-2">
+                      <div>
+                        <label>Единица измерения</label>
+                        <input name="unit" value="{{ item.unit or '' }}" />
+                      </div>
+                      <div>
+                        <label>Тип значения</label>
+                        <input name="value_type" value="{{ item.value_type }}" />
+                      </div>
+                    </div>
+                    <div>
+                      <label>Синонимы</label>
+                      <textarea name="synonyms_text">{{ item.synonyms | join('\n') }}</textarea>
+                    </div>
+                    <div class="checkbox-row">
+                      <label class="check"><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %} /> <span>Активен</span></label>
+                    </div>
+                    <button type="submit">Сохранить изменения</button>
+                  </form>
+                </article>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="empty">Пока нет ни одного канонического атрибута.</div>
+              {% endif %}
+            </article>
+          </div>
+        </section>
+
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Сводка и журнал</h2>
+              <p class="subtle">Здесь можно быстро просмотреть все сущности в сжатом виде и последние изменения по базе.</p>
+            </div>
+          </div>
+          <div class="section-grid">
+            <article class="list-card">
+              <h3>Краткая сводка сущностей</h3>
+              <table class="summary-table">
                 <thead>
                   <tr>
-                    <th>Имя</th>
-                    <th>Нормализованное имя</th>
-                    <th>Синонимы</th>
+                    <th>Тип</th>
+                    <th>Количество</th>
+                    <th>Что хранится</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {% for item in attributes %}
                   <tr>
-                    <td>{{ item.name }}</td>
-                    <td>{{ item.normalized_name }}</td>
-                    <td>{{ item.synonyms | join(", ") or "—" }}</td>
+                    <td>Нормативные источники</td>
+                    <td>{{ sources|length }}</td>
+                    <td>Документы, summary, metadata и retrieval-материалы</td>
                   </tr>
-                  {% endfor %}
+                  <tr>
+                    <td>Шаблоны писем</td>
+                    <td>{{ templates|length }}</td>
+                    <td>Тема, абзацы, переменные, версии и статусы</td>
+                  </tr>
+                  <tr>
+                    <td>Правила классификации</td>
+                    <td>{{ rules|length }}</td>
+                    <td>Классы, приоритеты, match terms и контекст</td>
+                  </tr>
+                  <tr>
+                    <td>Канонические атрибуты</td>
+                    <td>{{ attributes|length }}</td>
+                    <td>Нормализованные имена, типы значений и синонимы</td>
+                  </tr>
                 </tbody>
               </table>
-            </div>
-          </article>
+            </article>
 
-          <article class="card">
-            <h3>Журнал изменений</h3>
-            <div class="table-wrap">
-              <table>
+            <article class="list-card">
+              <h3>Журнал изменений</h3>
+              {% if audit_events %}
+              <table class="summary-table">
                 <thead>
                   <tr>
                     <th>Когда</th>
-                    <th>Что изменили</th>
-                    <th>Детали</th>
+                    <th>Сущность</th>
+                    <th>Изменение</th>
                   </tr>
                 </thead>
                 <tbody>
                   {% for item in audit_events %}
                   <tr>
                     <td>{{ item.created_at }}</td>
-                    <td>{{ item.entity_type }} · {{ item.action }}</td>
-                    <td><code>{{ item.snapshot_json }}</code></td>
+                    <td>{{ item.entity_type }}</td>
+                    <td><span class="mono">{{ item.action }}</span></td>
                   </tr>
                   {% endfor %}
                 </tbody>
               </table>
+              {% else %}
+              <div class="empty">Журнал пока пуст.</div>
+              {% endif %}
+            </article>
+          </div>
+        </section>
+
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <h2>Памятка</h2>
+              <p class="subtle">Короткая подсказка для редактора базы знаний.</p>
             </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="layout" style="margin-top: 20px;">
-        <article class="card">
-          <h3>Шаблоны писем</h3>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ключ</th>
-                  <th>Версия</th>
-                  <th>Статус</th>
-                  <th>Тема</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for item in templates %}
-                <tr>
-                  <td><code>{{ item.template_key }}</code></td>
-                  <td>{{ item.version }}</td>
-                  <td><span class="badge {% if item.is_published %}published{% else %}draft{% endif %}">{{ "Опубликовано" if item.is_published else "Черновик" }}</span></td>
-                  <td>{{ item.subject_template }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
           </div>
-        </article>
-
-        <article class="card">
-          <h3>Правила классификации</h3>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Класс</th>
-                  <th>Приоритет</th>
-                  <th>Слова и фразы</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for item in rules %}
-                <tr>
-                  <td>{{ item.appeal_class }}</td>
-                  <td>{{ item.priority }}</td>
-                  <td>{{ item.match_terms | join(", ") }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </article>
-
-      </section>
-
-      <section class="full-width">
-        <article class="card">
-          <h3>Памятка по заполнению</h3>
-          <p class="subtle">Если нужно быстро внести изменение без участия разработчика, используйте только эту страницу.</p>
-          <details class="guide">
-            <summary>Показать краткую памятку</summary>
-            <h2 style="margin-top: 12px;">Когда что заполнять</h2>
-            <ol>
-              <li>Если нужно изменить текст ответа, добавьте или обновите шаблон письма.</li>
-              <li>Если система неверно определяет тип обращения, добавьте новое правило классификации.</li>
-              <li>Если модели должны искать новый параметр или характеристику, добавьте каноническую сущность.</li>
-              <li>Если нужен новый закон, инструкция или внутренний регламент, загрузите документ в базу.</li>
+          <article class="info-card">
+            <h3>Когда что менять</h3>
+            <ol class="guide-list">
+              <li>Если нужно изменить текст ответа, редактируйте или добавляйте шаблон письма.</li>
+              <li>Если система ошибается в типе обращения, меняйте правила классификации.</li>
+              <li>Если модель должна искать новый параметр, добавляйте канонический атрибут.</li>
+              <li>Если нужен новый регламент или закон, загружайте нормативный источник.</li>
             </ol>
-          </details>
-        </article>
-      </section>
+          </article>
+        </section>
+      </div>
     </div>
   </body>
 </html>

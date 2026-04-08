@@ -76,9 +76,32 @@ def _admin_url(project_key: str) -> str:
     return f"/admin/{project_key}"
 
 
+def _redirect_to(project_key: str, anchor: str | None = None) -> str:
+    base = _admin_url(project_key.strip())
+    return f"{base}#{anchor}" if anchor else base
+
+
 def _apply_updates(model: Any, payload: dict[str, Any]) -> None:
     for key, value in payload.items():
         setattr(model, key, value)
+
+
+def _split_lines(raw_text: str | None) -> list[str]:
+    if not raw_text:
+        return []
+    return [line.strip() for line in raw_text.splitlines() if line.strip()]
+
+
+def _parse_json_text(raw_text: str | None, *, field_name: str) -> dict[str, Any]:
+    if not raw_text or not raw_text.strip():
+        return {}
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a JSON object")
+    return payload
 
 
 def _audit_snapshot(model: Any) -> dict[str, Any]:
@@ -166,6 +189,7 @@ def update_letter_template(
     _apply_updates(template, payload.model_dump(exclude_unset=True))
     record_audit_event(
         db,
+        project_key=template.project_key,
         entity_type="letter_template",
         entity_id=template.id,
         action="update",
@@ -174,6 +198,42 @@ def update_letter_template(
     db.commit()
     db.refresh(template)
     return template
+
+
+@router.post("/admin/forms/letter-template/{template_id}")
+def update_letter_template_form(
+    template_id: str,
+    project_key: str = Form(...),
+    template_key: str = Form(...),
+    version: int = Form(default=1),
+    subject_template: str = Form(...),
+    paragraphs_text: str = Form(...),
+    variables_text: str = Form(default=""),
+    is_active: bool = Form(default=False),
+    is_published: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    template = db.get(LetterTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Letter template not found")
+    template.project_key = project_key.strip()
+    template.template_key = template_key.strip()
+    template.version = version
+    template.subject_template = subject_template.strip()
+    template.paragraphs = _split_lines(paragraphs_text)
+    template.variables = _split_lines(variables_text)
+    template.is_active = is_active
+    template.is_published = is_published
+    record_audit_event(
+        db,
+        project_key=template.project_key,
+        entity_type="letter_template",
+        entity_id=template.id,
+        action="update",
+        snapshot=_audit_snapshot(template),
+    )
+    db.commit()
+    return RedirectResponse(url=_redirect_to(project_key, "templates"), status_code=303)
 
 
 @router.get("/appeal-classification-rules", response_model=list[AppealClassificationRuleRead])
@@ -245,6 +305,46 @@ def update_appeal_classification_rule(
     return rule
 
 
+@router.post("/admin/forms/classification-rule/{rule_id}")
+def update_classification_rule_form(
+    rule_id: str,
+    project_key: str = Form(...),
+    appeal_class: str = Form(...),
+    rule_name: str = Form(...),
+    requester_type: str | None = Form(default=None),
+    authority_type: str | None = Form(default=None),
+    priority: int = Form(default=100),
+    version: int = Form(default=1),
+    description: str | None = Form(default=None),
+    match_terms_text: str = Form(default=""),
+    is_active: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    rule = db.get(AppealClassificationRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Appeal classification rule not found")
+    rule.project_key = project_key.strip()
+    rule.appeal_class = appeal_class.strip()
+    rule.rule_name = rule_name.strip()
+    rule.requester_type = (requester_type or "").strip() or None
+    rule.authority_type = (authority_type or "").strip() or None
+    rule.priority = priority
+    rule.version = version
+    rule.description = (description or "").strip() or None
+    rule.match_terms = _split_lines(match_terms_text)
+    rule.is_active = is_active
+    record_audit_event(
+        db,
+        project_key=rule.project_key,
+        entity_type="classification_rule",
+        entity_id=rule.id,
+        action="update",
+        snapshot=_audit_snapshot(rule),
+    )
+    db.commit()
+    return RedirectResponse(url=_redirect_to(project_key, "rules"), status_code=303)
+
+
 @router.get("/canonical-attributes", response_model=list[CanonicalAttributeRead])
 def list_canonical_attributes(
     domain: str | None = Query(default=None),
@@ -310,6 +410,40 @@ def update_canonical_attribute(
     return item
 
 
+@router.post("/admin/forms/canonical-attribute/{attribute_id}")
+def update_canonical_attribute_form(
+    attribute_id: str,
+    project_key: str = Form(...),
+    name: str = Form(...),
+    normalized_name: str = Form(...),
+    unit: str | None = Form(default=None),
+    value_type: str = Form(default="string"),
+    synonyms_text: str = Form(default=""),
+    is_active: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    item = db.get(CanonicalAttribute, attribute_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Canonical attribute not found")
+    item.domain = project_key.strip()
+    item.name = name.strip()
+    item.normalized_name = normalized_name.strip()
+    item.unit = (unit or "").strip() or None
+    item.value_type = value_type.strip()
+    item.synonyms = _split_lines(synonyms_text)
+    item.is_active = is_active
+    record_audit_event(
+        db,
+        project_key=item.domain,
+        entity_type="canonical_attribute",
+        entity_id=item.id,
+        action="update",
+        snapshot=_audit_snapshot(item),
+    )
+    db.commit()
+    return RedirectResponse(url=_redirect_to(project_key, "attributes"), status_code=303)
+
+
 @router.get("/normative-sources", response_model=list[NormativeSourceRead])
 def list_normative_sources(
     project_key: str | None = Query(default=None),
@@ -368,6 +502,51 @@ def update_normative_source(
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.post("/admin/forms/normative-source/{source_id}")
+def update_normative_source_form(
+    source_id: str,
+    project_key: str = Form(...),
+    source_key: str = Form(...),
+    title: str = Form(...),
+    source_type: str = Form(...),
+    version: int = Form(default=1),
+    jurisdiction: str | None = Form(default=None),
+    status_value: str = Form(default="draft"),
+    effective_from: date | None = Form(default=None),
+    effective_to: date | None = Form(default=None),
+    summary: str | None = Form(default=None),
+    metadata_json: str | None = Form(default=None),
+    is_published: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    item = db.get(NormativeSource, source_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Normative source not found")
+    item.project_key = project_key.strip()
+    item.source_key = source_key.strip()
+    item.title = title.strip()
+    item.source_type = source_type.strip()
+    item.version = version
+    item.jurisdiction = (jurisdiction or "").strip() or None
+    item.status = status_value.strip()
+    item.is_published = is_published or item.status == "published"
+    item.effective_from = effective_from
+    item.effective_to = effective_to
+    item.summary = (summary or "").strip() or None
+    item.metadata_json = _parse_json_text(metadata_json, field_name="metadata_json")
+    reindex_source_chunks(db, item)
+    record_audit_event(
+        db,
+        project_key=item.project_key,
+        entity_type="normative_source",
+        entity_id=item.id,
+        action="update",
+        snapshot=_audit_snapshot(item),
+    )
+    db.commit()
+    return RedirectResponse(url=_redirect_to(project_key, "sources"), status_code=303)
 
 
 @router.get("/retrieval/search", response_model=RetrievalResponse)
@@ -491,10 +670,7 @@ async def normative_upload_form(
 ):
     raw_metadata = {}
     if metadata_json:
-        try:
-            raw_metadata = json.loads(metadata_json)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid metadata_json: {exc}") from exc
+        raw_metadata = _parse_json_text(metadata_json, field_name="metadata_json")
 
     payload = await file.read()
     if not payload:
@@ -516,7 +692,7 @@ async def normative_upload_form(
         file_bytes=payload,
     )
     db.commit()
-    return RedirectResponse(url=_admin_url(project_key.strip()), status_code=303)
+    return RedirectResponse(url=_redirect_to(project_key, "sources"), status_code=303)
 
 
 @router.post("/admin/forms/letter-template")
@@ -536,13 +712,13 @@ def letter_template_form(
         template_key=template_key.strip(),
         version=version,
         subject_template=subject_template,
-        paragraphs=[line.strip() for line in paragraphs_text.splitlines() if line.strip()],
-        variables=[line.strip() for line in variables_text.splitlines() if line.strip()],
+        paragraphs=_split_lines(paragraphs_text),
+        variables=_split_lines(variables_text),
         is_active=is_active,
         is_published=is_published,
     )
     create_letter_template(payload, db)
-    return RedirectResponse(url=_admin_url(project_key.strip()), status_code=303)
+    return RedirectResponse(url=_redirect_to(project_key, "templates"), status_code=303)
 
 
 @router.post("/admin/forms/classification-rule")
@@ -568,11 +744,11 @@ def classification_rule_form(
         priority=priority,
         version=version,
         description=(description or "").strip() or None,
-        match_terms=[line.strip() for line in match_terms_text.splitlines() if line.strip()],
+        match_terms=_split_lines(match_terms_text),
         is_active=is_active,
     )
     create_appeal_classification_rule(payload, db)
-    return RedirectResponse(url=_admin_url(project_key.strip()), status_code=303)
+    return RedirectResponse(url=_redirect_to(project_key, "rules"), status_code=303)
 
 
 @router.post("/admin/forms/canonical-attribute")
@@ -592,11 +768,11 @@ def canonical_attribute_form(
         normalized_name=normalized_name.strip(),
         unit=(unit or "").strip() or None,
         value_type=value_type.strip(),
-        synonyms=[line.strip() for line in synonyms_text.splitlines() if line.strip()],
+        synonyms=_split_lines(synonyms_text),
         is_active=is_active,
     )
     create_canonical_attribute(payload, db)
-    return RedirectResponse(url=_admin_url(project_key.strip()), status_code=303)
+    return RedirectResponse(url=_redirect_to(project_key, "attributes"), status_code=303)
 
 
 @router.post("/admin/forms/source-status/{source_id}")
@@ -621,4 +797,4 @@ def source_status_form(
         snapshot={"status": source.status, "is_published": source.is_published},
     )
     db.commit()
-    return RedirectResponse(url=_admin_url(project_key.strip()), status_code=303)
+    return RedirectResponse(url=_redirect_to(project_key, "sources"), status_code=303)
