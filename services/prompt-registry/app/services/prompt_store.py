@@ -11,7 +11,13 @@ PROMPTS = {
             "ВАЖНО: каждая характеристика ДОЛЖНА иметь название. Для каждой "
             "характеристики возвращайте объект: {name, value, references}, где "
             "name — человекочитаемое название характеристики на русском "
-            "(например: \"Расход\", \"Напор\", \"Мощность\", \"Материал\")."
+            "(например: \"Расход\", \"Напор\", \"Мощность\", \"Материал\"). "
+            "Для references по возможности возвращайте структурированные объекты с "
+            "полями quote_text, anchor_text, page, locator_strategy, confidence и bbox. "
+            "quote_text должен быть дословной цитатой из документа, без пересказа и нормализации. "
+            "Если характеристика находится в таблице, quote_text должен содержать строку таблицы или "
+            "ячейку с реальным значением. anchor_text должен содержать ближайший заголовок, подпись "
+            "или контекстный фрагмент. Если точная структура невозможна, допускается строковая цитата."
         ),
         "schema": {
             "type": "object",
@@ -35,7 +41,39 @@ PROMPTS = {
                                         "value": {"type": ["string", "null"]},
                                         "references": {
                                             "type": "array",
-                                            "items": {"type": "string"},
+                                            "items": {
+                                                "anyOf": [
+                                                    {"type": "string"},
+                                                    {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "quote_text": {"type": ["string", "null"]},
+                                                            "anchor_text": {"type": ["string", "null"]},
+                                                            "locator_text": {"type": ["string", "null"]},
+                                                            "page": {"type": ["integer", "string", "null"]},
+                                                            "locator_strategy": {"type": ["string", "null"]},
+                                                            "confidence": {"type": ["number", "null"]},
+                                                            "bbox": {
+                                                                "type": ["object", "null"],
+                                                                "properties": {
+                                                                    "x": {"type": ["number", "null"]},
+                                                                    "y": {"type": ["number", "null"]},
+                                                                    "width": {"type": ["number", "null"]},
+                                                                    "height": {"type": ["number", "null"]},
+                                                                    "x0": {"type": ["number", "null"]},
+                                                                    "y0": {"type": ["number", "null"]},
+                                                                    "x1": {"type": ["number", "null"]},
+                                                                    "y1": {"type": ["number", "null"]},
+                                                                    "left": {"type": ["number", "null"]},
+                                                                    "top": {"type": ["number", "null"]},
+                                                                    "right": {"type": ["number", "null"]},
+                                                                    "bottom": {"type": ["number", "null"]},
+                                                                },
+                                                            },
+                                                        },
+                                                    },
+                                                ]
+                                            },
                                         },
                                     },
                                 },
@@ -57,7 +95,13 @@ PROMPTS = {
             "Результаты должны быть на русском языке.\n\n"
             "ВАЖНО: каждая характеристика ДОЛЖНА иметь название. Для каждой "
             "характеристики возвращайте объект: {name, value, references}, где "
-            "name — человекочитаемое название характеристики на русском."
+            "name — человекочитаемое название характеристики на русском. "
+            "Для references по возможности возвращайте структурированные объекты с "
+            "полями quote_text, anchor_text, page, locator_strategy, confidence и bbox. "
+            "quote_text должен быть дословной цитатой из документа, без пересказа и нормализации. "
+            "Если характеристика находится в таблице, quote_text должен содержать строку таблицы или "
+            "ячейку с реальным значением. anchor_text должен содержать ближайший заголовок, подпись "
+            "или контекстный фрагмент. Если точная структура невозможна, допускается строковая цитата."
         ),
         "schema": {
             "type": "object",
@@ -81,7 +125,39 @@ PROMPTS = {
                                         "value": {"type": ["string", "null"]},
                                         "references": {
                                             "type": "array",
-                                            "items": {"type": "string"},
+                                            "items": {
+                                                "anyOf": [
+                                                    {"type": "string"},
+                                                    {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "quote_text": {"type": ["string", "null"]},
+                                                            "anchor_text": {"type": ["string", "null"]},
+                                                            "locator_text": {"type": ["string", "null"]},
+                                                            "page": {"type": ["integer", "string", "null"]},
+                                                            "locator_strategy": {"type": ["string", "null"]},
+                                                            "confidence": {"type": ["number", "null"]},
+                                                            "bbox": {
+                                                                "type": ["object", "null"],
+                                                                "properties": {
+                                                                    "x": {"type": ["number", "null"]},
+                                                                    "y": {"type": ["number", "null"]},
+                                                                    "width": {"type": ["number", "null"]},
+                                                                    "height": {"type": ["number", "null"]},
+                                                                    "x0": {"type": ["number", "null"]},
+                                                                    "y0": {"type": ["number", "null"]},
+                                                                    "x1": {"type": ["number", "null"]},
+                                                                    "y1": {"type": ["number", "null"]},
+                                                                    "left": {"type": ["number", "null"]},
+                                                                    "top": {"type": ["number", "null"]},
+                                                                    "right": {"type": ["number", "null"]},
+                                                                    "bottom": {"type": ["number", "null"]},
+                                                                },
+                                                            },
+                                                        },
+                                                    },
+                                                ]
+                                            },
                                         },
                                     },
                                 },

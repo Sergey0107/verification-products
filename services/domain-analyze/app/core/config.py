@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     PROMPT_REGISTRY_URL: str = "http://prompt-registry:8000"
+    KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
+    KNOWLEDGE_BASE_TIMEOUT_SECONDS: int = 5
     API_GATEWAY_URL: str = "http://api-gateway:8000"
     CELERY_BROKER_URL: str = "amqp://guest:guest@rabbitmq:5672//"
     CELERY_RESULT_BACKEND: str = "rpc://"

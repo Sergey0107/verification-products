@@ -1,10 +1,12 @@
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import httpx
 
 from app.core.config import settings
+from app.services.knowledge_base_client import list_canonical_attributes, search_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,47 @@ def _normalize_docling_extraction(result_payload: dict) -> None:
     extraction["products"] = _dedupe_products(products)
 
 
+def _build_knowledge_base_prompt_appendix(file_type: str) -> str:
+    if file_type not in {"tz", "passport"}:
+        return ""
+
+    sections: list[str] = []
+    try:
+        attributes = list_canonical_attributes()
+    except Exception:
+        attributes = []
+    if attributes:
+        lines = ["Канонические технические атрибуты из Knowledge Base:"]
+        for item in attributes[:100]:
+            name = item.get("name")
+            normalized_name = item.get("normalized_name")
+            unit = item.get("unit")
+            synonyms = ", ".join(str(v) for v in (item.get("synonyms") or [])[:8])
+            lines.append(
+                f"- name={name}; normalized_name={normalized_name}; unit={unit}; synonyms={synonyms}"
+            )
+        sections.append("\n".join(lines))
+
+    try:
+        retrieval = search_knowledge(
+            "технические характеристики оборудования паспорт изделия техническое задание соответствие параметры требования",
+            limit=5,
+        )
+    except Exception:
+        retrieval = []
+    if retrieval:
+        lines = ["Релевантные нормативные/методические выдержки из Knowledge Base:"]
+        for item in retrieval:
+            lines.append(
+                f"- [{item.get('source_key')} v{item.get('source_version')}] {item.get('source_title')}: {item.get('text')}"
+            )
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return ""
+    return "\n\nИспользуй следующую Knowledge Base как источник истины для нормализации характеристик и терминов:\n" + "\n\n".join(sections)
+
+
 def build_s3_url(storage_key: str) -> str:
     endpoint = settings.S3_ENDPOINT.rstrip("/")
     bucket = settings.BUCKET_NAME.strip()
@@ -72,6 +115,7 @@ def run_extraction_task(
     file_type: str,
     storage_path: str,
     storage_url: str | None = None,
+    extraction_backend: str | None = None,
 ) -> None:
     file_type = (file_type or "").lower()
     if not storage_path:
@@ -94,9 +138,9 @@ def run_extraction_task(
             "file_id": file_id,
             "file_type": file_type,
             "file_url": file_url,
-            "prompt": prompt_payload.get("prompt"),
+            "prompt": (prompt_payload.get("prompt") or "") + _build_knowledge_base_prompt_appendix(file_type),
             "schema": prompt_payload.get("schema"),
-            "backend": settings.EXTRACTION_BACKEND,
+            "backend": extraction_backend or settings.EXTRACTION_BACKEND,
         }
 
         extract_resp = client.post(
@@ -109,7 +153,12 @@ def run_extraction_task(
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)
-    filename = "test1.json" if file_type == "tz" else "test2.json"
+    safe_file_type = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in file_type
+    ) or "unknown"
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+    filename = f"{timestamp}_{analysis_id}_{file_id}_{safe_file_type}.json"
     target = debug_dir / filename
     with target.open("w", encoding="utf-8") as handle:
         json.dump(result_payload, handle, ensure_ascii=True, indent=2)

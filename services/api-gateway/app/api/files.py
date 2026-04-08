@@ -2,7 +2,7 @@
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from app.db.models.analysis import Analysis
 from app.db.models.files import File as FileModel
 from app.db.models.extraction_jobs import ExtractionJob
 from app.db.session import get_db
+from app.services.extraction_backends import normalize_extraction_backend
 from app.tasks import extract_file
 
 router = APIRouter()
@@ -19,11 +20,13 @@ router = APIRouter()
 
 @router.post("/files/upload")
 async def upload_files(
+    extraction_backend: str = Form("openrouter"),
     tz_file: UploadFile = File(...),
     passport_file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    analysis = Analysis(status="processing_files")
+    selected_backend = normalize_extraction_backend(extraction_backend)
+    analysis = Analysis(status="processing_files", extraction_backend=selected_backend)
     db.add(analysis)
     await db.flush()
     await db.refresh(analysis)
@@ -52,11 +55,13 @@ async def upload_files(
     await db.commit()
 
     async with httpx.AsyncClient() as client:
+        await tz_file.seek(0)
+        await passport_file.seek(0)
         files = {
-            "tz_file": (tz_file.filename, await tz_file.read(), tz_file.content_type),
+            "tz_file": (tz_file.filename, tz_file.file, tz_file.content_type),
             "passport_file": (
                 passport_file.filename,
-                await passport_file.read(),
+                passport_file.file,
                 passport_file.content_type,
             ),
         }
@@ -99,9 +104,11 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         )
 
     status_before_result = await db.execute(
-        select(Analysis.status).where(Analysis.id == analysis_id)
+        select(Analysis.status, Analysis.extraction_backend).where(Analysis.id == analysis_id)
     )
-    status_before = status_before_result.scalar_one_or_none()
+    analysis_state = status_before_result.one_or_none()
+    status_before = analysis_state[0] if analysis_state else None
+    extraction_backend = analysis_state[1] if analysis_state else "openrouter"
 
     await db.execute(
         update(FileModel)
@@ -168,7 +175,15 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         await db.commit()
         for job_id, analysis_id_value, file_id, file_type, storage_path, storage_url in new_jobs:
             extract_file.apply_async(
-                args=[job_id, analysis_id_value, file_id, file_type, storage_path, storage_url],
+                args=[
+                    job_id,
+                    analysis_id_value,
+                    file_id,
+                    file_type,
+                    storage_path,
+                    storage_url,
+                    extraction_backend,
+                ],
                 task_id=job_id,
             )
 

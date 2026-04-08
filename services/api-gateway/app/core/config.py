@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     PROMPT_REGISTRY_URL: str = "http://prompt-registry:8000"
     EXTRACTION_SERVICE_URL: str = "http://extraction-service:8000"
-    EXTRACTION_BACKEND: str = "docling_local"
+    EXTRACTION_BACKEND: str = "openrouter"
+    KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
+    KNOWLEDGE_BASE_TIMEOUT_SECONDS: int = 5
     DOMAIN_ANALYZE_URL: str = "http://domain-analyze:8000"
     S3_ENDPOINT: str = "https://storage.yandexcloud.net"
     BUCKET_NAME: str = ""

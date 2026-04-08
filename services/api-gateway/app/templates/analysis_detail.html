@@ -11,6 +11,10 @@
       href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&family=Unbounded:wght@500;600&display=swap"
       rel="stylesheet"
     />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js" referrerpolicy="no-referrer"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.7/dist/docx-preview.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mark.js/8.11.1/mark.min.js" referrerpolicy="no-referrer"></script>
   </head>
   <body>
     <main class="page">
@@ -47,7 +51,69 @@
         </article>
       </section>
 
+      <section class="document-reader" data-analysis-id="{{ analysis.id }}">
+        <header class="document-reader-header">
+          <div>
+            <p class="meta-label">Просмотр документов</p>
+            <div class="document-reader-title" data-reader-title>Документ не открыт</div>
+          </div>
+          <div class="reader-launchers">
+            <button class="btn btn-outline" type="button" data-open-document="tz">
+              Открыть ТЗ
+            </button>
+            <button class="btn btn-outline" type="button" data-open-document="passport">
+              Открыть Паспорт
+            </button>
+          </div>
+        </header>
+        <div class="document-reader-toolbar">
+          <span class="pill" data-reader-status>Выберите ТЗ или Паспорт</span>
+          <div class="reader-page-tools">
+            <button class="btn btn-outline btn-small" type="button" data-page-prev disabled>
+              Назад
+            </button>
+            <span class="meta-value" data-page-indicator>Страница - / -</span>
+            <button class="btn btn-outline btn-small" type="button" data-page-next disabled>
+              Вперед
+            </button>
+            <button class="btn btn-outline btn-small" type="button" data-zoom-out disabled>
+              -
+            </button>
+            <button class="btn btn-outline btn-small" type="button" data-zoom-in disabled>
+              +
+            </button>
+          </div>
+        </div>
+        <div class="document-reader-body">
+          <aside class="reader-sidebar">
+            <div class="reader-sidebar-title">Извлеченные характеристики</div>
+            <p class="cell-muted" data-characteristics-empty>
+              Откройте ТЗ или Паспорт, чтобы увидеть извлеченные характеристики и навигацию по ним.
+            </p>
+            <div class="doc-char-list" data-reader-characteristics hidden></div>
+          </aside>
+            <div class="reader-main">
+              <div class="reader-stage" data-reader-stage>
+              <div class="pdf-reader" data-pdf-reader hidden>
+                <div class="pdf-page-shell" data-pdf-shell>
+                  <canvas class="pdf-canvas" data-pdf-canvas></canvas>
+                  <div class="pdf-highlight-layer" data-pdf-highlight-layer></div>
+                  <div class="pdf-text-layer" data-pdf-text-layer></div>
+                </div>
+              </div>
+              <div class="docx-reader" data-docx-reader hidden>
+                <div class="docx-container" data-docx-container></div>
+              </div>
+            </div>
+            <div class="doc-info" data-reader-info>
+              После открытия документа можно выбирать характеристики в левой колонке или переходить из таблицы сравнения.
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="table-wrapper">
+
         <div class="actions" style="padding: 16px; border-bottom: 1px solid var(--line); justify-content: flex-start; gap: 12px; flex-wrap: wrap;">
           <button class="btn btn-primary btn-small" type="button" data-save-user-results disabled>
             Сохранить оценки
@@ -62,6 +128,7 @@
               <th>Цитата ТЗ</th>
               <th>Паспорт</th>
               <th>Цитата паспорта</th>
+              <th style="width: 160px;">Навигация</th>
               <th style="width: 120px;">Оценка</th>
               <th style="width: 150px;">Комментарий</th>
             </tr>
@@ -91,9 +158,35 @@
                 {% endif %}
               </td>
               <td>{{ row.tz_value }}</td>
-              <td class="cell-muted">{{ row.tz_quote }}</td>
+              <td class="cell-muted">
+                <div>{{ row.tz_quote }}</div>
+              </td>
               <td>{{ row.passport_value }}</td>
-              <td class="cell-muted">{{ row.passport_quote }}</td>
+              <td class="cell-muted">
+                <div>{{ row.passport_quote }}</div>
+              </td>
+              <td>
+                <div class="row-actions">
+                  <a
+                    class="btn btn-outline btn-small"
+                    data-open-viewer
+                    data-doc="tz"
+                    href="{{ viewer_context.documents.get('tz', {}).get('download_url', '#') }}"
+                    onclick="window.openComparisonEvidence('{{ row.id }}', 'tz'); return false;"
+                  >
+                    ТЗ
+                  </a>
+                  <a
+                    class="btn btn-outline btn-small"
+                    data-open-viewer
+                    data-doc="passport"
+                    href="{{ viewer_context.documents.get('passport', {}).get('download_url', '#') }}"
+                    onclick="window.openComparisonEvidence('{{ row.id }}', 'passport'); return false;"
+                  >
+                    Паспорт
+                  </a>
+                </div>
+              </td>
               <td>
                 <label class="checkbox">
                   <input
@@ -159,6 +252,7 @@
         </div>
       </div>
     </main>
-    <script src="/static/js/analysis_detail.js"></script>
+    <script type="application/json" data-viewer-context-json>{{ viewer_context | tojson }}</script>
+    <script src="/static/js/analysis_detail.js?v=20260408j"></script>
   </body>
 </html>

@@ -29,6 +29,10 @@
         {% for item in items %}
         <article class="list-item" data-analysis-id="{{ item.analysis_id }}">
           <div class="meta">
+            <p class="meta-label">Backend:</p>
+            <p class="meta-value">{{ item.extraction_backend_label }}</p>
+          </div>
+          <div class="meta">
             <p class="meta-label">Техническое задание:</p>
             <p class="meta-value">
               {% if item.tz_id %}
@@ -70,6 +74,18 @@
             <button class="btn btn-outline btn-icon" type="button" data-close>✕</button>
           </header>
           <form class="upload-form" data-upload-form action="/files/upload" method="post" enctype="multipart/form-data">
+            <div class="field">
+              <label class="field-label" for="extraction_backend">Backend извлечения</label>
+              <div class="input-row">
+                <select id="extraction_backend" name="extraction_backend">
+                  {% for option in backend_options %}
+                  <option value="{{ option.value }}" {% if option.value == selected_backend %}selected{% endif %}>
+                    {{ option.label }}
+                  </option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
             <div class="field">
               <label class="field-label" for="tz_file">Техническое задание</label>
               <div class="input-row">

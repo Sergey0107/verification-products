@@ -34,6 +34,7 @@ def extract_file(
     file_type: str,
     storage_path: str,
     storage_url: str | None = None,
+    extraction_backend: str | None = None,
 ) -> None:
     attempt = self.request.retries + 1
     mark_job_running(job_id, attempt)
@@ -44,6 +45,7 @@ def extract_file(
             file_type=file_type,
             storage_path=storage_path,
             storage_url=storage_url,
+            extraction_backend=extraction_backend,
         )
         with SessionLocal() as session:
             stmt = (

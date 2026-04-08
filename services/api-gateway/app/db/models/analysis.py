@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Boolean, DateTime, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func, text
 from app.db.base import Base
 
@@ -14,6 +14,7 @@ class Analysis(Base):
         server_default=text("gen_random_uuid()"),
     )
     status = Column(String, nullable=False)
+    extraction_backend = Column(String, nullable=False, server_default=text("'openrouter'"))
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -33,6 +34,8 @@ class ComparisonRow(Base):
     passport_value = Column(Text)
     tz_quote = Column(Text)
     passport_quote = Column(Text)
+    tz_evidence = Column(JSONB)
+    passport_evidence = Column(JSONB)
     llm_result = Column(Boolean)
     user_result = Column(Boolean, server_default=text("true"))
     note = Column(String)

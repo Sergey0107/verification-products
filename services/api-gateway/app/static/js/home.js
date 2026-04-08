@@ -14,6 +14,10 @@ const renderItem = (item) => {
   return `
     <article class="list-item" data-analysis-id="${item.analysis_id}">
       <div class="meta">
+        <p class="meta-label">Backend:</p>
+        <p class="meta-value">${item.extraction_backend_label || item.extraction_backend || ''}</p>
+      </div>
+      <div class="meta">
         <p class="meta-label">Техническое задание:</p>
         <p class="meta-value">${tzLink}</p>
       </div>

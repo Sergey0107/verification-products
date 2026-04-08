@@ -5,10 +5,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user_optional
-from app.api.analyses import build_analysis_items, _status_key, _status_label
+from app.api.analyses import (
+    _status_key,
+    _status_label,
+    build_analysis_items,
+    build_viewer_context_payload,
+)
 from app.db.models.analysis import Analysis, ComparisonRow, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
+from app.services.extraction_backends import EXTRACTION_BACKEND_LABELS, normalize_extraction_backend
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -23,7 +29,16 @@ async def index(request: Request, db: AsyncSession = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"request": request, "items": items, "user": current_user},
+        {
+            "request": request,
+            "items": items,
+            "user": current_user,
+            "backend_options": [
+                {"value": value, "label": EXTRACTION_BACKEND_LABELS[value]}
+                for value in EXTRACTION_BACKEND_LABELS
+            ],
+            "selected_backend": normalize_extraction_backend(None),
+        },
     )
 
 
@@ -107,6 +122,7 @@ async def analysis_detail(analysis_id: str, request: Request, db: AsyncSession =
     processing_seconds = None
     if analysis.created_at and analysis.updated_at:
         processing_seconds = int((analysis.updated_at - analysis.created_at).total_seconds())
+    viewer_context = await build_viewer_context_payload(analysis.id, db)
 
     return templates.TemplateResponse(
         request,
@@ -119,5 +135,6 @@ async def analysis_detail(analysis_id: str, request: Request, db: AsyncSession =
             "status_key": _status_key(analysis.status),
             "processing_seconds": processing_seconds,
             "comment_map": comment_map,
+            "viewer_context": viewer_context,
         },
     )
