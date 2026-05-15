@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -186,9 +186,6 @@ async def register_user(
     db: AsyncSession = Depends(get_db),
 ):
     _validate_password_or_raise(payload.password)
-    result = await db.execute(select(func.count(User.id)))
-    if (result.scalar_one() or 0) > 0:
-        raise HTTPException(status_code=403, detail="Registration is disabled")
     result = await db.execute(select(User).where(User.login == payload.login))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Login already exists")
