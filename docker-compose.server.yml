@@ -1,0 +1,54 @@
+services:
+  api-gateway:
+    command: >
+      sh -c "python /app/scripts/wait_for_db.py &&
+             alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports: !reset []
+    restart: unless-stopped
+
+  file-service:
+    ports: !reset []
+    restart: unless-stopped
+
+  file-service-worker:
+    restart: unless-stopped
+
+  api-gateway-worker:
+    restart: unless-stopped
+
+  rabbitmq:
+    ports: !reset []
+    restart: unless-stopped
+
+  prompt-registry:
+    ports: !reset []
+    restart: unless-stopped
+
+  extraction-service:
+    ports: !reset []
+    restart: unless-stopped
+
+  domain-analyze:
+    ports: !reset []
+    restart: unless-stopped
+
+  domain-analyze-worker:
+    restart: unless-stopped
+
+  knowledge-base:
+    ports: !reset []
+    restart: unless-stopped
+
+  minio:
+    ports: !reset []
+    restart: unless-stopped
+
+  postgres:
+    ports: !reset []
+    restart: unless-stopped
+
+  frontend:
+    ports: !override
+      - "80:80"
+    restart: unless-stopped

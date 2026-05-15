@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Text
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func, text
 from app.db.base import Base
@@ -13,6 +13,7 @@ class Analysis(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user.id"), nullable=True)
     status = Column(String, nullable=False)
     extraction_backend = Column(String, nullable=False, server_default=text("'openrouter'"))
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

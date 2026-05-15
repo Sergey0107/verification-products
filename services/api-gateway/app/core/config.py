@@ -23,9 +23,12 @@ class Settings(BaseSettings):
         else SettingsConfigDict()
     )
     DATABASE_URL: str = "postgresql+asyncpg://analyzer:analyzer@localhost:5432/analyzer"
-    SECRET_KEY: str = "change_me"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    SESSION_EXPIRE_MINUTES: int = 8 * 60
+    SESSION_COOKIE_NAME: str = "ivolga_session"
+    CSRF_COOKIE_NAME: str = "ivolga_csrf"
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: str = "lax"
+    COOKIE_DOMAIN: str | None = None
     PROMPT_REGISTRY_URL: str = "http://prompt-registry:8000"
     EXTRACTION_SERVICE_URL: str = "http://extraction-service:8000"
     EXTRACTION_BACKEND: str = "openrouter"

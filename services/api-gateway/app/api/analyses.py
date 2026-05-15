@@ -4,14 +4,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_current_user
 from app.db.models.analysis import Analysis
 from app.db.models.extraction_results import ExtractionResult
 from app.db.models.comparison_jobs import ComparisonJob
 from app.db.models.files import File as FileModel
 from app.db.models.analysis import ComparisonRow
+from app.db.models.users import User
 from app.db.session import get_db
 from app.services.extraction_backends import extraction_backend_label
 
@@ -229,17 +231,16 @@ def _status_key(status: str) -> str:
     return mapping.get(status, "in-progress")
 
 
-async def build_analysis_items(db: AsyncSession) -> list[dict]:
-    rows = await db.execute(
-        select(
-            Analysis.id,
-            Analysis.status,
-            Analysis.created_at,
-            Analysis.extraction_backend,
-        ).order_by(
-            Analysis.created_at.desc()
-        )
+async def build_analysis_items(db: AsyncSession, user: User | None = None) -> list[dict]:
+    query = select(
+        Analysis.id,
+        Analysis.status,
+        Analysis.created_at,
+        Analysis.extraction_backend,
     )
+    if user is not None:
+        query = query.where(Analysis.user_id == user.id)
+    rows = await db.execute(query.order_by(Analysis.created_at.desc()))
     analyses = rows.all()
     items = []
     for analysis_id, status, created_at, extraction_backend in analyses:
@@ -320,18 +321,43 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
     }
 
 
+async def _ensure_analysis_owner(
+    analysis_id: UUID,
+    db: AsyncSession,
+    user: User,
+) -> Analysis:
+    result = await db.execute(
+        select(Analysis)
+        .where(Analysis.id == analysis_id)
+        .where(Analysis.user_id == user.id)
+    )
+    analysis = result.scalar_one_or_none()
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    return analysis
+
+
 @router.get("/analyses")
-async def list_analyses(db: AsyncSession = Depends(get_db)):
-    items = await build_analysis_items(db)
+async def list_analyses(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    items = await build_analysis_items(db, current_user)
     return {"items": items}
 
 
 @router.post("/analyses/{analysis_id}/status")
-async def set_status(analysis_id: str, status: str, db: AsyncSession = Depends(get_db)):
+async def set_status(
+    analysis_id: str,
+    status: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         analysis_uuid = UUID(analysis_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
     await db.execute(
         update(Analysis)
         .where(Analysis.id == analysis_uuid)
@@ -343,7 +369,10 @@ async def set_status(analysis_id: str, status: str, db: AsyncSession = Depends(g
 
 @router.get("/analyses/{analysis_id}/extraction/{file_type}")
 async def get_extraction(
-    analysis_id: str, file_type: str, db: AsyncSession = Depends(get_db)
+    analysis_id: str,
+    file_type: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if file_type not in {"tz", "passport"}:
         raise HTTPException(status_code=400, detail="Invalid file type")
@@ -351,6 +380,7 @@ async def get_extraction(
         analysis_uuid = UUID(analysis_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
     result = await db.execute(
         select(ExtractionResult)
         .where(ExtractionResult.analysis_id == analysis_uuid)
@@ -363,11 +393,16 @@ async def get_extraction(
 
 
 @router.get("/analyses/{analysis_id}/comparison")
-async def get_comparison(analysis_id: str, db: AsyncSession = Depends(get_db)):
+async def get_comparison(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         analysis_uuid = UUID(analysis_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
     result = await db.execute(
         select(ComparisonJob).where(ComparisonJob.analysis_id == analysis_uuid)
     )
@@ -378,9 +413,14 @@ async def get_comparison(analysis_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/analyses/{analysis_id}/viewer-context")
-async def get_viewer_context(analysis_id: str, db: AsyncSession = Depends(get_db)):
+async def get_viewer_context(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         analysis_uuid = UUID(analysis_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
     return await build_viewer_context_payload(analysis_uuid, db)

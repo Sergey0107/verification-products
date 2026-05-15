@@ -8,8 +8,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
+from app.api.auth import get_current_user
 from app.db.models.analysis import Analysis
 from app.db.models.files import File as FileModel
+from app.db.models.users import User
 from app.db.models.extraction_jobs import ExtractionJob
 from app.db.session import get_db
 from app.services.extraction_backends import normalize_extraction_backend
@@ -24,9 +26,14 @@ async def upload_files(
     tz_file: UploadFile = File(...),
     passport_file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     selected_backend = normalize_extraction_backend(extraction_backend)
-    analysis = Analysis(status="processing_files", extraction_backend=selected_backend)
+    analysis = Analysis(
+        user_id=current_user.id,
+        status="processing_files",
+        extraction_backend=selected_backend,
+    )
     db.add(analysis)
     await db.flush()
     await db.refresh(analysis)
@@ -192,14 +199,22 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
 
 @router.get("/files/{file_id}/download")
 async def download_file(
-    file_id: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         file_uuid = UUID(file_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
 
-    result = await db.execute(select(FileModel).where(FileModel.id == file_uuid))
+    result = await db.execute(
+        select(FileModel)
+        .join(Analysis, Analysis.id == FileModel.analysis_id)
+        .where(FileModel.id == file_uuid)
+        .where(Analysis.user_id == current_user.id)
+    )
     file_record = result.scalar_one_or_none()
     if file_record is None:
         raise HTTPException(status_code=404, detail="File not found")

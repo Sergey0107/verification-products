@@ -2,8 +2,6 @@ fastapi
 uvicorn[standard]
 pydantic-settings
 sqlalchemy
-asyncpg
-alembic
 jinja2
 python-multipart
 python-docx

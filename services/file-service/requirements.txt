@@ -6,7 +6,3 @@ boto3
 celery
 aiofiles
 httpx
-pydantic-settings
-sqlalchemy
-asyncpg
-alembic

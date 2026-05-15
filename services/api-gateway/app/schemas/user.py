@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class UserCreate(BaseModel):
     login: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=6, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
 
 
 class LoginRequest(BaseModel):
@@ -20,6 +20,8 @@ class UserPublic(BaseModel):
     created_at: datetime | None = None
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+class LoginResponse(BaseModel):
+    ok: bool = True
+    user: UserPublic
+    csrf_token: str
+    token_type: str = "session"

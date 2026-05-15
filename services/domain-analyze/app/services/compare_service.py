@@ -249,6 +249,7 @@ def _build_span_payload(
     locator_text: str | None,
     bbox: dict[str, float] | None,
     confidence: float | None,
+    matched_text: str | None = None,
 ) -> dict[str, Any]:
     return {
         "fragment_type": fragment_type,
@@ -260,6 +261,7 @@ def _build_span_payload(
         "locator_text": locator_text,
         "bbox": bbox,
         "confidence": confidence,
+        "matched_text": matched_text,
     }
 
 
@@ -302,6 +304,7 @@ def _normalize_reference_span(reference: Any, fallback_quote: str | None) -> dic
             locator_text=locator_text,
             bbox=bbox,
             confidence=float(confidence),
+            matched_text=reference.get("matched_text"),
         )
 
     if isinstance(reference, str):

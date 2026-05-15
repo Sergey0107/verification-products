@@ -1,0 +1,11 @@
+services:
+  frontend:
+    build:
+      context: ../pdf-analyzer
+    environment:
+      API_UPSTREAM: http://api-gateway:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      api-gateway:
+        condition: service_healthy

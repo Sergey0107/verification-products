@@ -1,10 +1,7 @@
-from datetime import datetime, timedelta
-from typing import Optional
+import hashlib
+import secrets
 
-from jose import jwt
 from passlib.context import CryptContext
-
-from app.core.config import settings
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
@@ -17,9 +14,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def create_access_token(subject: str, expires_minutes: Optional[int] = None) -> str:
-    expire = datetime.utcnow() + timedelta(
-        minutes=expires_minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES
-    )
-    payload = {"sub": subject, "exp": expire}
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+def generate_secret_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_secret_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

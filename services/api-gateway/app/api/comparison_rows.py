@@ -5,7 +5,9 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.analysis import ComparisonRow, UserEdit
+from app.api.auth import get_current_user
+from app.db.models.analysis import Analysis, ComparisonRow, UserEdit
+from app.db.models.users import User
 from app.db.session import get_db
 
 router = APIRouter()
@@ -21,25 +23,10 @@ class CommentPayload(BaseModel):
 
 @router.post("/comparison-rows/{row_id}/user-result")
 async def set_user_result(
-    row_id: str, payload: UserResultPayload, db: AsyncSession = Depends(get_db)
-):
-    try:
-        row_uuid = UUID(row_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
-
-    await db.execute(
-        update(ComparisonRow)
-        .where(ComparisonRow.id == row_uuid)
-        .values(user_result=payload.user_result)
-    )
-    await db.commit()
-    return {"ok": True}
-
-
-@router.post("/comparison-rows/{row_id}/comment")
-async def add_comment(
-    row_id: str, payload: CommentPayload, db: AsyncSession = Depends(get_db)
+    row_id: str,
+    payload: UserResultPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         row_uuid = UUID(row_id)
@@ -47,7 +34,38 @@ async def add_comment(
         raise HTTPException(status_code=400, detail="Invalid id")
 
     result = await db.execute(
-        select(ComparisonRow).where(ComparisonRow.id == row_uuid)
+        select(ComparisonRow.id)
+        .join(Analysis, Analysis.id == ComparisonRow.analysis_id)
+        .where(ComparisonRow.id == row_uuid)
+        .where(Analysis.user_id == current_user.id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Row not found")
+
+    await db.execute(
+        update(ComparisonRow).where(ComparisonRow.id == row_uuid).values(user_result=payload.user_result)
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/comparison-rows/{row_id}/comment")
+async def add_comment(
+    row_id: str,
+    payload: CommentPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        row_uuid = UUID(row_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+
+    result = await db.execute(
+        select(ComparisonRow)
+        .join(Analysis, Analysis.id == ComparisonRow.analysis_id)
+        .where(ComparisonRow.id == row_uuid)
+        .where(Analysis.user_id == current_user.id)
     )
     row = result.scalar_one_or_none()
     if row is None:
