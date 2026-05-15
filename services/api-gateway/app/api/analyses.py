@@ -291,6 +291,8 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
             "file_name": file_row.original_name,
             "mime_type": file_row.mime_type,
             "download_url": f"/files/{file_row.id}/download",
+            "viewer_url": f"/files/{file_row.id}/preview",
+            "viewer_mime_type": "application/pdf",
             "characteristics": _build_document_characteristics(
                 file_row.file_type,
                 extraction_results.get(file_row.file_type),

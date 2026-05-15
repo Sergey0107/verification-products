@@ -235,3 +235,49 @@ async def download_file(
 
     background_tasks.add_task(_close)
     return StreamingResponse(resp.aiter_bytes(), media_type=content_type, headers=headers)
+
+
+@router.get("/files/{file_id}/preview")
+async def preview_file(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        file_uuid = UUID(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+
+    result = await db.execute(
+        select(FileModel)
+        .join(Analysis, Analysis.id == FileModel.analysis_id)
+        .where(FileModel.id == file_uuid)
+        .where(Analysis.user_id == current_user.id)
+    )
+    file_record = result.scalar_one_or_none()
+    if file_record is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    params = {
+        "key": file_record.storage_path,
+        "name": file_record.original_name,
+    }
+    if file_record.mime_type:
+        params["content_type"] = file_record.mime_type
+
+    client = httpx.AsyncClient(timeout=120)
+    resp = await client.get("http://file-service:8000/files/preview", params=params)
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "application/pdf")
+    content_disposition = resp.headers.get("content-disposition")
+    headers = {}
+    if content_disposition:
+        headers["content-disposition"] = content_disposition
+
+    async def _close():
+        await resp.aclose()
+        await client.aclose()
+
+    background_tasks.add_task(_close)
+    return StreamingResponse(resp.aiter_bytes(), media_type=content_type, headers=headers)
