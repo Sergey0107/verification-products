@@ -19,6 +19,10 @@ app.include_router(compare_router, tags=["compare"])
 app.include_router(health_router, tags=["health"])
 
 ALLOWED_PATHS = {
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/openapi.json",
+    "/redoc",
     "/auth/login",
     "/auth/register",
     "/files/callback",
