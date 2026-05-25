@@ -148,7 +148,9 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         )
         files_result = await db.execute(
             select(FileModel).where(
-                FileModel.analysis_id == analysis_id, FileModel.status == "uploaded"
+                FileModel.analysis_id == analysis_id,
+                FileModel.status == "uploaded",
+                FileModel.file_type == "tz",
             )
         )
         new_jobs = []

@@ -1,8 +1,13 @@
+import logging
+import traceback
+
 import httpx
 
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.services.compare_service import CompareParseError, compare_json
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
@@ -29,12 +34,25 @@ def compare_documents(
             "result": result,
         }
     except Exception as exc:
+        error_detail = "".join(
+            [
+                str(exc),
+                "\n\nDomain analyze worker traceback:\n",
+                traceback.format_exc(),
+            ]
+        )
+        logger.exception(
+            "Comparison task failed: analysis_id=%s job_id=%s attempt=%s",
+            analysis_id,
+            job_id,
+            self.request.retries + 1,
+        )
         raw = exc.raw if isinstance(exc, CompareParseError) else None
         payload = {
             "job_id": job_id,
             "analysis_id": analysis_id,
             "status": "failed",
-            "error": str(exc),
+            "error": error_detail,
             "raw": raw,
         }
         raise
