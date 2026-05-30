@@ -161,12 +161,19 @@ def _build_target_characteristics_appendix(
         return ""
 
     compact_items = []
+    product_model: str | None = None
+    product_name: str | None = None
     for item in target_characteristics:
         if not isinstance(item, dict):
             continue
+        if not product_model:
+            product_model = item.get("product_model")
+        if not product_name:
+            product_name = item.get("product_name")
         compact_items.append(
             {
                 "product_name": item.get("product_name"),
+                "product_model": item.get("product_model"),
                 "name": item.get("name"),
                 "value": item.get("value"),
             }
@@ -175,12 +182,25 @@ def _build_target_characteristics_appendix(
         return ""
 
     targets_json = json.dumps(compact_items, ensure_ascii=False, indent=2)
+
+    # Формируем подсказку о модели для точного поиска в многоколоночных таблицах
+    model_hint = ""
+    if product_model:
+        model_hint = (
+            f"\nIMPORTANT: The passport may contain a table with multiple models. "
+            f"Extract values specifically for model '{product_model}'"
+            + (f" (product: '{product_name}')" if product_name else "")
+            + ". If the table has columns for different models, use only the column "
+            f"that corresponds to '{product_model}'. Do not take values from other model columns.\n"
+        )
+
     return (
         "\n\nPassport extraction scope:\n"
         "Extract only the characteristics listed below. Do not extract unrelated passport "
         "characteristics. Keep the existing JSON schema with products and characteristics. "
         "For each target, find the corresponding value in the passport and preserve references/evidence "
         "when available. If a target is not present in the passport, omit it rather than adding unrelated data.\n"
+        f"{model_hint}"
         f"Target TZ characteristics:\n{targets_json}"
     )
 

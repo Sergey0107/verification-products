@@ -527,11 +527,15 @@ async def _save_tz_review_decisions(
         await db.execute(stmt)
 
 
-def _review_target_characteristics(rows: list[TzCharacteristicReview]) -> list[dict]:
+def _review_target_characteristics(
+    rows: list[TzCharacteristicReview],
+    product_model: str | None = None,
+) -> list[dict]:
     return [
         {
             "characteristic_id": row.characteristic_id,
             "product_name": row.product_name,
+            "product_model": product_model,
             "name": row.name,
             "value": row.value,
         }
@@ -676,6 +680,23 @@ async def continue_tz_review(
                 )
             )
 
+    # Достаём product_model из extraction result ТЗ чтобы передать в паспорт —
+    # LLM будет знать какую именно модель искать в таблице паспорта
+    tz_product_model: str | None = None
+    try:
+        tz_extraction_result = await db.execute(
+            select(ExtractionResult)
+            .where(ExtractionResult.analysis_id == analysis_uuid)
+            .where(ExtractionResult.file_type == "tz")
+        )
+        tz_extraction = tz_extraction_result.scalar_one_or_none()
+        if tz_extraction and tz_extraction.payload:
+            products = tz_extraction.payload.get("extraction", {}).get("products", [])
+            if products:
+                tz_product_model = products[0].get("product_model")
+    except Exception:
+        pass
+
     await db.commit()
     if should_enqueue:
         extract_file.apply_async(
@@ -687,7 +708,7 @@ async def continue_tz_review(
                 passport_file.storage_path,
                 passport_file.storage_url,
                 analysis.extraction_backend,
-                _review_target_characteristics(approved_rows),
+                _review_target_characteristics(approved_rows, tz_product_model),
             ],
             task_id=str(job_id),
         )
