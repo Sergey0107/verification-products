@@ -12,7 +12,7 @@ from celery.result import AsyncResult
 
 from app.celery_app import celery_app
 from app.core.config import settings
-from app.services.storage import download_file_path
+from app.services.storage import download_file_path, presign_url
 from app.tasks import upload_to_s3
 
 router = APIRouter()
@@ -114,6 +114,16 @@ async def upload_batch(
             "key": passport_key,
         },
     }
+
+
+@router.get("/files/presign")
+async def get_presigned_url(key: str, expires_in: int = 3600):
+    """Сгенерировать свежий presigned URL для ключа в S3/MinIO."""
+    try:
+        url = presign_url(key, expires_in)
+        return {"url": url}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/files/status/{task_id}")

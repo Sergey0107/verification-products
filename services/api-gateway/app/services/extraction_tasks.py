@@ -179,6 +179,21 @@ def build_s3_url(storage_key: str) -> str:
     return f"{endpoint}/{bucket}/{storage_key.lstrip('/')}"
 
 
+def _refresh_presigned_url(storage_path: str) -> str | None:
+    """Запрашивает свежий presigned URL у file-service по storage_path (ключу в S3)."""
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                f"{settings.FILE_SERVICE_URL}/files/presign",
+                params={"key": storage_path, "expires_in": 7200},
+            )
+            if resp.is_success:
+                return resp.json().get("url")
+    except Exception as exc:
+        logger.warning("Failed to refresh presigned URL for %s: %s", storage_path, exc)
+    return None
+
+
 def run_extraction_task(
     analysis_id: str,
     file_id: str,
@@ -192,12 +207,17 @@ def run_extraction_task(
     if not storage_path:
         raise ValueError(f"Missing storage_path for file {file_id}")
 
-    if storage_url:
-        file_url = storage_url
-    else:
-        if not settings.BUCKET_NAME:
-            raise ValueError("BUCKET_NAME is not set; cannot build S3 URL")
-        file_url = build_s3_url(storage_path)
+    # Всегда генерируем свежий presigned URL через file-service, чтобы избежать
+    # истечения срока действия URL из БД (TTL 1 час)
+    file_url = _refresh_presigned_url(storage_path)
+    if not file_url:
+        # Fallback: использовать сохранённый URL или прямой S3 URL
+        if storage_url:
+            file_url = storage_url
+        elif settings.BUCKET_NAME:
+            file_url = build_s3_url(storage_path)
+        else:
+            raise ValueError(f"Cannot build file URL for {file_id}: no presign, no storage_url, no BUCKET_NAME")
 
     with httpx.Client(timeout=settings.EXTRACTION_TIMEOUT_SECONDS) as client:
         prompt_resp = client.get(f"{settings.PROMPT_REGISTRY_URL}/prompts/{file_type}")

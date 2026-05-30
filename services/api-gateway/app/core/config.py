@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
     KNOWLEDGE_BASE_TIMEOUT_SECONDS: int = 5
     DOMAIN_ANALYZE_URL: str = "http://domain-analyze:8000"
+    FILE_SERVICE_URL: str = "http://file-service:8000"
     S3_ENDPOINT: str = "https://storage.yandexcloud.net"
     BUCKET_NAME: str = ""
     EXTRACTION_TIMEOUT_SECONDS: int = 600

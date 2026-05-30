@@ -194,9 +194,13 @@ def _dedupe_strings(values: list[str]) -> list[str]:
 def _infer_bbox(bbox: Any) -> dict[str, float] | None:
     if not isinstance(bbox, dict) or not bbox:
         return None
+
+    result: dict[str, float] = {}
+
+    # Пробуем извлечь абсолютные координаты
     if all(key in bbox for key in ("x", "y", "width", "height")):
         try:
-            return {
+            result = {
                 "x": float(bbox["x"]),
                 "y": float(bbox["y"]),
                 "width": float(bbox["width"]),
@@ -204,7 +208,7 @@ def _infer_bbox(bbox: Any) -> dict[str, float] | None:
             }
         except (TypeError, ValueError):
             return None
-    if all(key in bbox for key in ("x0", "y0", "x1", "y1")):
+    elif all(key in bbox for key in ("x0", "y0", "x1", "y1")):
         try:
             x0 = float(bbox["x0"])
             y0 = float(bbox["y0"])
@@ -212,8 +216,8 @@ def _infer_bbox(bbox: Any) -> dict[str, float] | None:
             y1 = float(bbox["y1"])
         except (TypeError, ValueError):
             return None
-        return {"x": x0, "y": y0, "width": max(0.0, x1 - x0), "height": max(0.0, y1 - y0)}
-    if all(key in bbox for key in ("left", "top", "right", "bottom")):
+        result = {"x": x0, "y": y0, "width": max(0.0, x1 - x0), "height": max(0.0, y1 - y0)}
+    elif all(key in bbox for key in ("left", "top", "right", "bottom")):
         try:
             left = float(bbox["left"])
             top = float(bbox["top"])
@@ -221,13 +225,25 @@ def _infer_bbox(bbox: Any) -> dict[str, float] | None:
             bottom = float(bbox["bottom"])
         except (TypeError, ValueError):
             return None
-        return {
+        result = {
             "x": left,
             "y": top,
             "width": max(0.0, right - left),
             "height": max(0.0, bottom - top),
         }
-    return None
+    else:
+        return None
+
+    # Сохраняем нормализованные координаты (norm_x0/norm_y0/norm_x1/norm_y1),
+    # если они есть в исходном bbox — фронтенд использует их для точного позиционирования
+    for norm_key in ("norm_x0", "norm_y0", "norm_x1", "norm_y1"):
+        if norm_key in bbox:
+            try:
+                result[norm_key] = float(bbox[norm_key])
+            except (TypeError, ValueError):
+                pass
+
+    return result
 
 
 def _derive_matched_terms(*parts: Any) -> list[str]:
@@ -531,6 +547,22 @@ def _attach_evidence_to_comparison(item: dict[str, Any], comparison: dict[str, A
     return comparison
 
 
+def _normalize_value_for_match(value: Any) -> str | None:
+    """Нормализует значение для простого сравнения: обрезает пробелы, приводит к нижнему регистру."""
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", str(value).strip()).lower()
+
+
+def _values_clearly_match(tz_value: Any, passport_value: Any) -> bool:
+    """Возвращает True, если значения однозначно совпадают (точное совпадение после нормализации)."""
+    norm_tz = _normalize_value_for_match(tz_value)
+    norm_passport = _normalize_value_for_match(passport_value)
+    if norm_tz is None or norm_passport is None:
+        return False
+    return norm_tz == norm_passport
+
+
 def _chunk(items: list[dict], size: int) -> list[list[dict]]:
     if size <= 0:
         return [items]
@@ -706,7 +738,7 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
             for missing_item in chunk_items[len(comparisons) :]:
                 comparisons.append(
                     {
-                        "characteristic": f"{missing_item.get('product_name')} — {missing_item.get('characteristic')}",
+                        "characteristic": missing_item.get("characteristic", ""),
                         "tz_value": missing_item.get("tz_value"),
                         "passport_value": missing_item.get("passport_value"),
                         "tz_quote": None,
@@ -719,10 +751,16 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
             comparisons = comparisons[: len(chunk_items)]
 
         for idx, item in enumerate(chunk_items):
-            if not comparisons[idx].get("characteristic"):
-                comparisons[idx]["characteristic"] = (
-                    f"{item.get('product_name')} — {item.get('characteristic')}"
-                )
+            # Всегда восстанавливаем поля из оригинала — LLM не должна их переименовывать
+            comparisons[idx]["characteristic"] = item.get("characteristic") or (
+                f"{item.get('product_name')} — {item.get('characteristic')}"
+            )
+            comparisons[idx]["tz_value"] = item.get("tz_value")
+            comparisons[idx]["passport_value"] = item.get("passport_value")
+            # Если значения однозначно совпадают, всегда ставим is_match=True,
+            # независимо от того, что вернула LLM
+            if _values_clearly_match(item.get("tz_value"), item.get("passport_value")):
+                comparisons[idx]["is_match"] = True
             comparisons[idx] = _attach_evidence_to_comparison(item, comparisons[idx])
         all_comparisons.extend(comparisons)
         if debug_chunk is None:

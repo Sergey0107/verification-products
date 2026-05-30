@@ -38,6 +38,18 @@ def upload_file_path(file_path: str, key: str, content_type: str | None = None) 
     return {"bucket": settings.BUCKET_NAME, "key": key, "url": presigned_url}
 
 
+def presign_url(key: str, expires_in: int | None = None) -> str:
+    if not settings.BUCKET_NAME:
+        raise ValueError("BUCKET_NAME is not set")
+    ttl = expires_in if expires_in is not None else settings.S3_PRESIGNED_TTL_SECONDS
+    client = _client()
+    return client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.BUCKET_NAME, "Key": key},
+        ExpiresIn=ttl,
+    )
+
+
 def download_file_path(key: str, target_path: str) -> str:
     if not settings.BUCKET_NAME:
         raise ValueError("BUCKET_NAME is not set")

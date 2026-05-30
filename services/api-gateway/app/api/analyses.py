@@ -402,6 +402,8 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
             {
                 "row_id": str(row.id),
                 "characteristic": row.characteristic,
+                "tz_value": row.tz_value,
+                "passport_value": row.passport_value,
                 "llm_result": row.llm_result,
                 "tz_evidence": row.tz_evidence
                 or _fallback_evidence("tz", row.tz_quote, row.tz_value),
