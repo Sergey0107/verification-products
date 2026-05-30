@@ -105,21 +105,26 @@ def _build_knowledge_base_prompt_appendix(file_type: str) -> str:
         return ""
 
     sections: list[str] = []
-    try:
-        attributes = list_canonical_attributes()
-    except Exception:
-        attributes = []
-    if attributes:
-        lines = ["Канонические технические атрибуты из Knowledge Base:"]
-        for item in attributes[:100]:
-            name = item.get("name")
-            normalized_name = item.get("normalized_name")
-            unit = item.get("unit")
-            synonyms = ", ".join(str(v) for v in (item.get("synonyms") or [])[:8])
-            lines.append(
-                f"- name={name}; normalized_name={normalized_name}; unit={unit}; synonyms={synonyms}"
-            )
-        sections.append("\n".join(lines))
+
+    # Для ТЗ Knowledge Base используем только как справочник единиц измерения —
+    # названия характеристик берём дословно из документа, без нормализации.
+    # Для паспорта — добавляем синонимы, чтобы найти характеристику под другим названием.
+    if file_type == "passport":
+        try:
+            attributes = list_canonical_attributes()
+        except Exception:
+            attributes = []
+        if attributes:
+            lines = ["Канонические технические атрибуты из Knowledge Base (используй для поиска по синонимам):"]
+            for item in attributes[:100]:
+                name = item.get("name")
+                normalized_name = item.get("normalized_name")
+                unit = item.get("unit")
+                synonyms = ", ".join(str(v) for v in (item.get("synonyms") or [])[:8])
+                lines.append(
+                    f"- name={name}; normalized_name={normalized_name}; unit={unit}; synonyms={synonyms}"
+                )
+            sections.append("\n".join(lines))
 
     try:
         retrieval = search_knowledge(
@@ -138,7 +143,14 @@ def _build_knowledge_base_prompt_appendix(file_type: str) -> str:
 
     if not sections:
         return ""
-    return "\n\nИспользуй следующую Knowledge Base как источник истины для нормализации характеристик и терминов:\n" + "\n\n".join(sections)
+
+    if file_type == "passport":
+        prefix = "\n\nИспользуй следующую Knowledge Base как источник истины для нормализации характеристик и терминов:\n"
+    else:
+        # Для ТЗ: НЕ нормализуем названия — берём дословно из документа
+        prefix = "\n\nДополнительный контекст из Knowledge Base (только для справки, НЕ используй для переименования характеристик — названия бери дословно из документа):\n"
+
+    return prefix + "\n\n".join(sections)
 
 
 def _build_target_characteristics_appendix(

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from app.api.auth import get_current_user
+from app.core.config import settings
 from app.db.models.analysis import Analysis
 from app.db.models.files import File as FileModel
 from app.db.models.users import User
@@ -261,6 +262,45 @@ async def preview_file(
     if file_record is None:
         raise HTTPException(status_code=404, detail="File not found")
 
+    is_pdf = (file_record.mime_type or "").lower() == "application/pdf" or \
+             (file_record.original_name or "").lower().endswith(".pdf")
+
+    if is_pdf:
+        # Для PDF: рендерим через extraction-service (PyMuPDF) чтобы решить проблему
+        # с нестандартными кириллическими шрифтами, которые PDF.js не умеет отображать.
+        # Получаем свежий presigned URL и передаём в /render-pdf.
+        try:
+            presign_client = httpx.AsyncClient(timeout=15)
+            presign_resp = await presign_client.get(
+                f"{settings.FILE_SERVICE_URL}/files/presign",
+                params={"key": file_record.storage_path, "expires_in": 3600},
+            )
+            await presign_client.aclose()
+            presign_resp.raise_for_status()
+            presigned_url = presign_resp.json().get("url", "")
+        except Exception:
+            presigned_url = ""
+
+        if presigned_url:
+            client = httpx.AsyncClient(timeout=300)
+            render_resp = await client.get(
+                f"{settings.EXTRACTION_SERVICE_URL}/render-pdf",
+                params={"url": presigned_url},
+            )
+            if render_resp.status_code == 200:
+                async def _close_render():
+                    await render_resp.aclose()
+                    await client.aclose()
+                background_tasks.add_task(_close_render)
+                return StreamingResponse(
+                    render_resp.aiter_bytes(),
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": "inline; filename=preview.pdf"},
+                )
+            await render_resp.aclose()
+            await client.aclose()
+        # Fallback: отдаём оригинальный PDF
+
     params = {
         "key": file_record.storage_path,
         "name": file_record.original_name,
@@ -269,7 +309,7 @@ async def preview_file(
         params["content_type"] = file_record.mime_type
 
     client = httpx.AsyncClient(timeout=120)
-    resp = await client.get("http://file-service:8000/files/preview", params=params)
+    resp = await client.get(f"{settings.FILE_SERVICE_URL}/files/preview", params=params)
     resp.raise_for_status()
     content_type = resp.headers.get("content-type", "application/pdf")
     content_disposition = resp.headers.get("content-disposition")
