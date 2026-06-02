@@ -24,6 +24,8 @@ router = APIRouter()
 @router.post("/files/upload")
 async def upload_files(
     extraction_backend: str = Form("openrouter"),
+    task_id: str = Form(""),
+    product_model: str = Form(""),
     tz_file: UploadFile = File(...),
     passport_file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
@@ -34,6 +36,8 @@ async def upload_files(
         user_id=current_user.id,
         status="processing_files",
         extraction_backend=selected_backend,
+        task_id=task_id.strip() or None,
+        product_model=product_model.strip() or None,
     )
     db.add(analysis)
     await db.flush()
@@ -112,11 +116,12 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         )
 
     status_before_result = await db.execute(
-        select(Analysis.status, Analysis.extraction_backend).where(Analysis.id == analysis_id)
+        select(Analysis.status, Analysis.extraction_backend, Analysis.product_model).where(Analysis.id == analysis_id)
     )
     analysis_state = status_before_result.one_or_none()
     status_before = analysis_state[0] if analysis_state else None
     extraction_backend = analysis_state[1] if analysis_state else "openrouter"
+    product_model = analysis_state[2] if analysis_state else None
 
     await db.execute(
         update(FileModel)
@@ -193,6 +198,8 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
                     storage_path,
                     storage_url,
                     extraction_backend,
+                    None,
+                    product_model,
                 ],
                 task_id=job_id,
             )

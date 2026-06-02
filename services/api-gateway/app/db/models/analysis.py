@@ -16,6 +16,8 @@ class Analysis(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user.id"), nullable=True)
     status = Column(String, nullable=False)
     extraction_backend = Column(String, nullable=False, server_default=text("'openrouter'"))
+    task_id = Column(String, nullable=True)
+    product_model = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
 

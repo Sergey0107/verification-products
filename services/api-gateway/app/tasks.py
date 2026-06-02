@@ -87,6 +87,7 @@ def extract_file(
     storage_url: str | None = None,
     extraction_backend: str | None = None,
     target_characteristics: list[dict] | None = None,
+    product_model: str | None = None,
 ) -> None:
     attempt = self.request.retries + 1
     mark_job_running(job_id, attempt)
@@ -99,6 +100,7 @@ def extract_file(
             storage_url=storage_url,
             extraction_backend=extraction_backend,
             target_characteristics=target_characteristics,
+            product_model=product_model,
         )
         with SessionLocal() as session:
             stmt = (

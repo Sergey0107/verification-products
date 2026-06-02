@@ -296,13 +296,15 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
         Analysis.status,
         Analysis.created_at,
         Analysis.extraction_backend,
+        Analysis.task_id,
+        Analysis.product_model,
     )
     if user is not None:
         query = query.where(Analysis.user_id == user.id)
     rows = await db.execute(query.order_by(Analysis.created_at.desc()))
     analyses = rows.all()
     items = []
-    for analysis_id, status, created_at, extraction_backend in analyses:
+    for analysis_id, status, created_at, extraction_backend, task_id, product_model in analyses:
         files_rows = await db.execute(
             select(
                 FileModel.id,
@@ -346,6 +348,8 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
         items.append(
             {
                 "analysis_id": str(analysis_id),
+                "task_id": task_id,
+                "product_model": product_model,
                 "tz": tz.original_name if tz else "",
                 "tz_id": str(tz.id) if tz else "",
                 "passport": passport.original_name if passport else "",
@@ -685,9 +689,10 @@ async def continue_tz_review(
     tz_product_model: str | None = None
     try:
         tz_extraction_result = await db.execute(
-            select(ExtractionResult)
-            .where(ExtractionResult.analysis_id == analysis_uuid)
-            .where(ExtractionResult.file_type == "tz")
+            select(ExtractionResult).where(
+                ExtractionResult.analysis_id == analysis_uuid,
+                ExtractionResult.file_type == "tz",
+            )
         )
         tz_extraction = tz_extraction_result.scalar_one_or_none()
         if tz_extraction and tz_extraction.payload:
@@ -696,6 +701,10 @@ async def continue_tz_review(
                 tz_product_model = products[0].get("product_model")
     except Exception:
         pass
+
+    # fallback: если LLM не нашёл модель в TZ, используем модель из Analysis (от пользователя)
+    if not tz_product_model:
+        tz_product_model = analysis.product_model
 
     await db.commit()
     if should_enqueue:

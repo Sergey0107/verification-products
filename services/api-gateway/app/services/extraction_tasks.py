@@ -153,6 +153,20 @@ def _build_knowledge_base_prompt_appendix(file_type: str) -> str:
     return prefix + "\n\n".join(sections)
 
 
+def _build_product_model_appendix(file_type: str, product_model: str | None) -> str:
+    """Если указана модель изделия — добавляем инструкцию LLM искать характеристики только для неё."""
+    if not product_model or file_type != "tz":
+        return ""
+    return (
+        f"\n\nIMPORTANT: The document may contain specifications for multiple product models. "
+        f"Extract characteristics ONLY for model '{product_model}'. "
+        f"If the document has a table with columns for different models, use only the column "
+        f"that corresponds to '{product_model}'. Do not take values from other model columns. "
+        f"If the model '{product_model}' is not found in the document, extract the closest match "
+        f"and note that the exact model was not found.\n"
+    )
+
+
 def _build_target_characteristics_appendix(
     file_type: str,
     target_characteristics: list[dict] | None,
@@ -234,6 +248,7 @@ def run_extraction_task(
     storage_url: str | None = None,
     extraction_backend: str | None = None,
     target_characteristics: list[dict] | None = None,
+    product_model: str | None = None,
 ) -> None:
     file_type = (file_type or "").lower()
     if not storage_path:
@@ -264,6 +279,7 @@ def run_extraction_task(
             "prompt": (
                 (prompt_payload.get("prompt") or "")
                 + _build_knowledge_base_prompt_appendix(file_type)
+                + _build_product_model_appendix(file_type, product_model)
                 + _build_target_characteristics_appendix(file_type, target_characteristics)
             ),
             "schema": prompt_payload.get("schema"),
