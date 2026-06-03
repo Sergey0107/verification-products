@@ -27,6 +27,7 @@ router = APIRouter()
 class TzReviewDecision(BaseModel):
     characteristic_id: str
     approved: bool
+    comment: str | None = None
 
 
 class TzReviewSaveRequest(BaseModel):
@@ -397,6 +398,17 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
         select(ComparisonRow).where(ComparisonRow.analysis_id == analysis_id)
     )
     rows = rows_result.scalars().all()
+
+    # Загружаем TZ review комментарии и матчим по имени характеристики
+    tz_reviews_result = await db.execute(
+        select(TzCharacteristicReview).where(TzCharacteristicReview.analysis_id == analysis_id)
+    )
+    tz_reviews = tz_reviews_result.scalars().all()
+    tz_comments_by_name: dict[str, list[str]] = {}
+    for tz_row in tz_reviews:
+        if tz_row.name and tz_row.comment and tz_row.comment.strip():
+            tz_comments_by_name.setdefault(tz_row.name, []).append(tz_row.comment.strip())
+
     return {
         "analysis_id": str(analysis_id),
         "evidence_version": "v2",
@@ -413,10 +425,27 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
                 or _fallback_evidence("tz", row.tz_quote, row.tz_value),
                 "passport_evidence": row.passport_evidence
                 or _fallback_evidence("passport", row.passport_quote, row.passport_value),
+                "user_comments": _match_tz_comments(row.characteristic, tz_comments_by_name),
             }
             for row in rows
         ],
     }
+
+
+def _match_tz_comments(characteristic: str, tz_comments_by_name: dict[str, list[str]]) -> list[str]:
+    """Матчит TZ review комментарии по имени характеристики.
+    ComparisonRow.characteristic имеет формат 'Product -- Characteristic' или просто 'Characteristic'.
+    Возвращает список комментариев (массив строк) для совместимости с фронтендом.
+    """
+    if not tz_comments_by_name:
+        return []
+    # Пробуем извлечь имя характеристики из строки "Product -- Characteristic"
+    if " -- " in characteristic:
+        parts = characteristic.split(" -- ", 1)
+        char_name = parts[1].strip()
+    else:
+        char_name = characteristic.strip()
+    return tz_comments_by_name.get(char_name, [])
 
 
 async def _ensure_analysis_owner(
@@ -478,6 +507,7 @@ def _merge_tz_review_items(
         row = rows_by_id.get(item["characteristic_id"])
         merged = dict(item)
         merged["approved"] = bool(row.approved) if row else True
+        merged["comment"] = row.comment if row and row.comment else None
         items.append(merged)
     return items
 
@@ -487,6 +517,7 @@ async def _save_tz_review_decisions(
     characteristics: list[dict],
     decisions: dict[str, bool],
     db: AsyncSession,
+    comments: dict[str, str | None] | None = None,
 ) -> None:
     characteristic_ids = {item["characteristic_id"] for item in characteristics}
     unknown_ids = set(decisions) - characteristic_ids
@@ -502,6 +533,10 @@ async def _save_tz_review_decisions(
             characteristic_id,
             bool(existing.approved) if existing else True,
         )
+        comment = (comments or {}).get(characteristic_id)
+        # сохраняем comment из запроса, или оставляем существующий
+        if comment is None and existing and existing.comment:
+            comment = existing.comment
         stmt = (
             insert(TzCharacteristicReview)
             .values(
@@ -513,6 +548,7 @@ async def _save_tz_review_decisions(
                 references=item.get("references"),
                 evidence=item.get("evidence"),
                 approved=approved,
+                comment=comment,
                 updated_at=now,
             )
             .on_conflict_do_update(
@@ -524,6 +560,7 @@ async def _save_tz_review_decisions(
                     "references": item.get("references"),
                     "evidence": item.get("evidence"),
                     "approved": approved,
+                    "comment": comment,
                     "updated_at": now,
                 },
             )
@@ -590,7 +627,8 @@ async def save_tz_review(
     extraction_row, _ = await _get_tz_review_source(analysis_uuid, db)
     characteristics = _build_document_characteristics("tz", extraction_row.payload)
     decisions = {item.characteristic_id: item.approved for item in payload.items}
-    await _save_tz_review_decisions(analysis_uuid, characteristics, decisions, db)
+    comments = {item.characteristic_id: item.comment for item in payload.items}
+    await _save_tz_review_decisions(analysis_uuid, characteristics, decisions, db, comments)
     await db.commit()
     rows_by_id = await _tz_review_rows_map(analysis_uuid, db)
     return {"ok": True, "items": _merge_tz_review_items(characteristics, rows_by_id)}
@@ -617,7 +655,11 @@ async def continue_tz_review(
         item.characteristic_id: item.approved
         for item in (payload.items if payload else [])
     }
-    await _save_tz_review_decisions(analysis_uuid, characteristics, decisions, db)
+    comments = {
+        item.characteristic_id: item.comment
+        for item in (payload.items if payload else [])
+    }
+    await _save_tz_review_decisions(analysis_uuid, characteristics, decisions, db, comments)
 
     approved_result = await db.execute(
         select(TzCharacteristicReview)

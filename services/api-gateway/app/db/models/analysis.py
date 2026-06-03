@@ -79,6 +79,7 @@ class TzCharacteristicReview(Base):
     references = Column(JSONB, nullable=True)
     evidence = Column(JSONB, nullable=True)
     approved = Column(Boolean, nullable=False, server_default=text("true"))
+    comment = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
 
