@@ -15,7 +15,7 @@ from app.db.models.extraction_results import ExtractionResult
 from app.db.models.comparison_jobs import ComparisonJob
 from app.db.models.extraction_jobs import ExtractionJob
 from app.db.models.files import File as FileModel
-from app.db.models.analysis import ComparisonRow
+from app.db.models.analysis import ComparisonRow, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
 from app.services.extraction_backends import extraction_backend_label
@@ -399,6 +399,18 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
     )
     rows = rows_result.scalars().all()
 
+    # Загружаем UserEdit комментарии (из модалки "Проверка совпадения") и группируем по row_id
+    row_ids = [row.id for row in rows]
+    user_edits_by_row: dict[str, list[str]] = {}
+    if row_ids:
+        edits_result = await db.execute(
+            select(UserEdit).where(UserEdit.comparison_row_id.in_(row_ids))
+        )
+        for edit in edits_result.scalars().all():
+            row_key = str(edit.comparison_row_id)
+            if edit.comment and edit.comment.strip():
+                user_edits_by_row.setdefault(row_key, []).append(edit.comment.strip())
+
     # Загружаем TZ review комментарии и матчим по имени характеристики
     tz_reviews_result = await db.execute(
         select(TzCharacteristicReview).where(TzCharacteristicReview.analysis_id == analysis_id)
@@ -425,27 +437,33 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
                 or _fallback_evidence("tz", row.tz_quote, row.tz_value),
                 "passport_evidence": row.passport_evidence
                 or _fallback_evidence("passport", row.passport_quote, row.passport_value),
-                "user_comments": _match_tz_comments(row.characteristic, tz_comments_by_name),
+                "user_comments": _build_user_comments(
+                    str(row.id), row.characteristic,
+                    user_edits_by_row, tz_comments_by_name,
+                ),
             }
             for row in rows
         ],
     }
 
 
-def _match_tz_comments(characteristic: str, tz_comments_by_name: dict[str, list[str]]) -> list[str]:
-    """Матчит TZ review комментарии по имени характеристики.
-    ComparisonRow.characteristic имеет формат 'Product -- Characteristic' или просто 'Characteristic'.
-    Возвращает список комментариев (массив строк) для совместимости с фронтендом.
-    """
-    if not tz_comments_by_name:
-        return []
-    # Пробуем извлечь имя характеристики из строки "Product -- Characteristic"
+def _build_user_comments(
+    row_id: str,
+    characteristic: str,
+    user_edits_by_row: dict[str, list[str]],
+    tz_comments_by_name: dict[str, list[str]],
+) -> list[str]:
+    """Объединяет комментарии из UserEdit (модалка проверки) и TzCharacteristicReview (ТЗ)."""
+    comments: list[str] = []
+    # 1. UserEdit комментарии (из модалки "Проверка совпадения")
+    comments.extend(user_edits_by_row.get(row_id, []))
+    # 2. TZ review комментарии (матч по имени характеристики)
     if " -- " in characteristic:
-        parts = characteristic.split(" -- ", 1)
-        char_name = parts[1].strip()
+        char_name = characteristic.split(" -- ", 1)[1].strip()
     else:
         char_name = characteristic.strip()
-    return tz_comments_by_name.get(char_name, [])
+    comments.extend(tz_comments_by_name.get(char_name, []))
+    return comments
 
 
 async def _ensure_analysis_owner(
