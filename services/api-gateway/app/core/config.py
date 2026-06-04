@@ -23,6 +23,7 @@ class Settings(BaseSettings):
         else SettingsConfigDict()
     )
     DATABASE_URL: str = "postgresql+asyncpg://analyzer:analyzer@localhost:5432/analyzer"
+    SQL_ECHO: bool = False
     SESSION_EXPIRE_MINUTES: int = 8 * 60
     SESSION_COOKIE_NAME: str = "ivolga_session"
     CSRF_COOKIE_NAME: str = "ivolga_csrf"

@@ -1,11 +1,10 @@
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
+from app.api.deps import parse_uuid
 from app.db.models.analysis import Analysis, ComparisonRow, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
@@ -28,10 +27,7 @@ async def set_user_result(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        row_uuid = UUID(row_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    row_uuid = parse_uuid(row_id)
 
     result = await db.execute(
         select(ComparisonRow.id)
@@ -56,10 +52,7 @@ async def add_comment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        row_uuid = UUID(row_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    row_uuid = parse_uuid(row_id)
 
     result = await db.execute(
         select(ComparisonRow)

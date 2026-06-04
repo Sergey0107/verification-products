@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from app.api.auth import get_current_user
+from app.api.deps import parse_uuid
 from app.core.config import settings
 from app.db.models.analysis import Analysis
 from app.db.models.files import File as FileModel
@@ -85,7 +86,7 @@ async def upload_files(
             "passport_key": passport_key,
         }
         response = await client.post(
-            "http://file-service:8000/files/upload-batch", files=files, data=data
+            f"{settings.FILE_SERVICE_URL}/files/upload-batch", files=files, data=data
         )
         response.raise_for_status()
         return response.json()
@@ -214,10 +215,7 @@ async def download_file(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        file_uuid = UUID(file_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    file_uuid = parse_uuid(file_id)
 
     result = await db.execute(
         select(FileModel)
@@ -231,7 +229,7 @@ async def download_file(
 
     params = {"key": file_record.storage_path, "name": file_record.original_name}
     client = httpx.AsyncClient(timeout=60)
-    resp = await client.get("http://file-service:8000/files/download", params=params)
+    resp = await client.get(f"{settings.FILE_SERVICE_URL}/files/download", params=params)
     resp.raise_for_status()
     content_type = resp.headers.get("content-type", "application/octet-stream")
     content_disposition = resp.headers.get("content-disposition")
@@ -254,10 +252,7 @@ async def preview_file(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        file_uuid = UUID(file_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    file_uuid = parse_uuid(file_id)
 
     result = await db.execute(
         select(FileModel)

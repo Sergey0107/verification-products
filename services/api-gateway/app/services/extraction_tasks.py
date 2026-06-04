@@ -249,7 +249,7 @@ def run_extraction_task(
     extraction_backend: str | None = None,
     target_characteristics: list[dict] | None = None,
     product_model: str | None = None,
-) -> None:
+) -> dict:
     file_type = (file_type or "").lower()
     if not storage_path:
         raise ValueError(f"Missing storage_path for file {file_id}")

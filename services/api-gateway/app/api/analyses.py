@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
+from app.api.deps import parse_uuid
 from app.db.models.analysis import Analysis, TzCharacteristicReview
 from app.db.models.extraction_results import ExtractionResult
 from app.db.models.comparison_jobs import ComparisonJob
@@ -455,9 +456,7 @@ def _build_user_comments(
 ) -> list[str]:
     """Объединяет комментарии из UserEdit (модалка проверки) и TzCharacteristicReview (ТЗ)."""
     comments: list[str] = []
-    # 1. UserEdit комментарии (из модалки "Проверка совпадения")
     comments.extend(user_edits_by_row.get(row_id, []))
-    # 2. TZ review комментарии (матч по имени характеристики)
     if " -- " in characteristic:
         char_name = characteristic.split(" -- ", 1)[1].strip()
     else:
@@ -552,7 +551,6 @@ async def _save_tz_review_decisions(
             bool(existing.approved) if existing else True,
         )
         comment = (comments or {}).get(characteristic_id)
-        # сохраняем comment из запроса, или оставляем существующий
         if comment is None and existing and existing.comment:
             comment = existing.comment
         stmt = (
@@ -608,10 +606,7 @@ async def get_tz_review(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     extraction_row, file_row = await _get_tz_review_source(analysis_uuid, db)
     characteristics = _build_document_characteristics("tz", extraction_row.payload)
@@ -637,10 +632,7 @@ async def save_tz_review(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     extraction_row, _ = await _get_tz_review_source(analysis_uuid, db)
     characteristics = _build_document_characteristics("tz", extraction_row.payload)
@@ -659,10 +651,7 @@ async def continue_tz_review(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     analysis = await _ensure_analysis_owner(analysis_uuid, db, current_user)
     if analysis.status in {"ready", "analyzing_data", "extracting_passport"}:
         return {"ok": True, "status": analysis.status}
@@ -800,10 +789,7 @@ async def set_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     await db.execute(
         update(Analysis)
@@ -823,10 +809,7 @@ async def get_extraction(
 ):
     if file_type not in {"tz", "passport"}:
         raise HTTPException(status_code=400, detail="Invalid file type")
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     result = await db.execute(
         select(ExtractionResult)
@@ -845,10 +828,7 @@ async def get_comparison(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     result = await db.execute(
         select(ComparisonJob).where(ComparisonJob.analysis_id == analysis_uuid)
@@ -865,9 +845,6 @@ async def get_viewer_context(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid id")
+    analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     return await build_viewer_context_payload(analysis_uuid, db)

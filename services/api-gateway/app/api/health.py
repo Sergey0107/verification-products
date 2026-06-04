@@ -1,6 +1,8 @@
 ﻿import httpx
 from fastapi import APIRouter
 
+from app.core.config import settings
+
 router = APIRouter()
 
 
@@ -12,5 +14,5 @@ async def health():
 @router.get("/file-service/health")
 async def ping_file_service():
     async with httpx.AsyncClient() as client:
-        response = await client.get("http://file-service:8000/health")
+        response = await client.get(f"{settings.FILE_SERVICE_URL}/health")
         return response.json()
