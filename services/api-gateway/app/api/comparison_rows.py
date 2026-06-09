@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -11,6 +13,11 @@ from app.db.session import get_db
 
 router = APIRouter()
 
+# Фронт сохраняет одно действие двумя запросами подряд: сначала /user-result,
+# затем /comment. Чтобы они попали в ОДНУ запись (а не задвоились), комментарий
+# прикрепляется к только что созданной записи отметки в пределах этого окна.
+SAME_ACTION_WINDOW = timedelta(seconds=15)
+
 
 class UserResultPayload(BaseModel):
     user_result: bool
@@ -21,23 +28,15 @@ class CommentPayload(BaseModel):
     comment: str
 
 
-async def _get_or_create_user_edit(
-    db: AsyncSession, row_id, user_id
-) -> UserEdit:
-    """Возвращает текущую запись фидбэка пользователя по строке (последнюю) или
-    создаёт новую. Одно действие пользователя = одна запись (отметка + коммент),
-    а не две раздельные."""
+async def _ensure_row_owned(db: AsyncSession, row_uuid, user: User) -> None:
     result = await db.execute(
-        select(UserEdit)
-        .where(UserEdit.comparison_row_id == row_id)
-        .where(UserEdit.user_id == user_id)
-        .order_by(UserEdit.edited_at.desc())
+        select(ComparisonRow.id)
+        .join(Analysis, Analysis.id == ComparisonRow.analysis_id)
+        .where(ComparisonRow.id == row_uuid)
+        .where(Analysis.user_id == user.id)
     )
-    edit = result.scalars().first()
-    if edit is None:
-        edit = UserEdit(comparison_row_id=row_id, user_id=user_id)
-        db.add(edit)
-    return edit
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Row not found")
 
 
 @router.post("/comparison-rows/{row_id}/user-result")
@@ -48,27 +47,21 @@ async def set_user_result(
     current_user: User = Depends(get_current_user),
 ):
     row_uuid = parse_uuid(row_id)
-
-    result = await db.execute(
-        select(ComparisonRow.id)
-        .join(Analysis, Analysis.id == ComparisonRow.analysis_id)
-        .where(ComparisonRow.id == row_uuid)
-        .where(Analysis.user_id == current_user.id)
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Row not found")
+    await _ensure_row_owned(db, row_uuid, current_user)
 
     await db.execute(
         update(ComparisonRow).where(ComparisonRow.id == row_uuid).values(user_result=payload.user_result)
     )
-    # Одно действие пользователя = ОДНА запись фидбэка. Обновляем существующую
-    # запись этого пользователя по строке (или создаём), а не плодим новые —
-    # иначе отметка и комментарий расходились на две записи.
+    # Каждая отметка — НОВАЯ запись фидбэка (история накапливается, не перезаписываем).
     comment = payload.comment.strip() if payload.comment and payload.comment.strip() else None
-    edit = await _get_or_create_user_edit(db, row_uuid, current_user.id)
-    edit.user_result = payload.user_result
-    if comment is not None:
-        edit.comment = comment
+    db.add(
+        UserEdit(
+            comparison_row_id=row_uuid,
+            user_id=current_user.id,
+            user_result=payload.user_result,
+            comment=comment,
+        )
+    )
     await db.commit()
     return {"ok": True}
 
@@ -81,20 +74,30 @@ async def add_comment(
     current_user: User = Depends(get_current_user),
 ):
     row_uuid = parse_uuid(row_id)
+    await _ensure_row_owned(db, row_uuid, current_user)
 
-    result = await db.execute(
-        select(ComparisonRow)
-        .join(Analysis, Analysis.id == ComparisonRow.analysis_id)
-        .where(ComparisonRow.id == row_uuid)
-        .where(Analysis.user_id == current_user.id)
+    # Если этот /comment — часть того же действия, что и только что прошедший
+    # /user-result (свежая запись этого пользователя БЕЗ комментария), дописываем
+    # комментарий в неё → одно действие = одна запись. Иначе — новая запись
+    # (отдельный комментарий накапливается в истории).
+    recent = await db.execute(
+        select(UserEdit)
+        .where(UserEdit.comparison_row_id == row_uuid)
+        .where(UserEdit.user_id == current_user.id)
+        .where(UserEdit.comment.is_(None))
+        .where(UserEdit.edited_at >= datetime.utcnow() - SAME_ACTION_WINDOW)
+        .order_by(UserEdit.edited_at.desc())
     )
-    row = result.scalar_one_or_none()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Row not found")
-
-    # Прикрепляем комментарий к существующей записи фидбэка пользователя по этой
-    # строке (или создаём), чтобы отметка и комментарий жили в ОДНОЙ записи.
-    edit = await _get_or_create_user_edit(db, row.id, current_user.id)
-    edit.comment = payload.comment
+    edit = recent.scalars().first()
+    if edit is not None:
+        edit.comment = payload.comment
+    else:
+        db.add(
+            UserEdit(
+                comparison_row_id=row_uuid,
+                user_id=current_user.id,
+                comment=payload.comment,
+            )
+        )
     await db.commit()
     return {"ok": True}
