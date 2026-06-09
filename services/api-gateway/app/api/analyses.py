@@ -114,11 +114,22 @@ def _reference_to_span(reference: object, fallback_text: str | None) -> dict | N
             page = _extract_page_number(
                 str(reference.get("quote_text") or reference.get("anchor_text") or reference.get("locator_text") or "")
             )
+        # Если геометрия не подтвердила позицию (position_unverified=True),
+        # не выдаём её как точный page_anchor — это давало ложную подсветку
+        # на стр. 1 для характеристик из сканов. Страницу оставляем как мягкую
+        # подсказку, но тип якоря — текстовый.
+        unverified = reference.get("position_unverified") is True
+        has_exact_position = bool(page) and not unverified
         return {
-            "fragment_type": "page_anchor" if page else "text_anchor",
-            "locator_strategy": str(reference.get("locator_strategy") or ("page_anchor" if page else "text_anchor")),
-            "page_number": page,
-            "page": page,
+            "fragment_type": "page_anchor" if has_exact_position else "text_anchor",
+            "locator_strategy": str(
+                reference.get("locator_strategy")
+                or ("page_anchor" if has_exact_position else "text_anchor")
+            ),
+            "page_number": page if has_exact_position else None,
+            "page": page if has_exact_position else None,
+            "page_hint": page if (page and unverified) else None,
+            "position_unverified": unverified,
             "anchor_text": reference.get("anchor_text") or reference.get("locator_text") or fallback_text,
             "quote_text": reference.get("quote_text") or fallback_text,
             "locator_text": reference.get("locator_text") or reference.get("anchor_text") or fallback_text,
@@ -400,17 +411,34 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
     )
     rows = rows_result.scalars().all()
 
-    # Загружаем UserEdit комментарии (из модалки "Проверка совпадения") и группируем по row_id
+    # Загружаем UserEdit (комментарии и отметки Да/Нет из модалки "Проверка
+    # совпадения") вместе с автором (login) и группируем по row_id.
     row_ids = [row.id for row in rows]
     user_edits_by_row: dict[str, list[str]] = {}
+    feedback_by_row: dict[str, list[dict]] = {}
     if row_ids:
         edits_result = await db.execute(
-            select(UserEdit).where(UserEdit.comparison_row_id.in_(row_ids))
+            select(UserEdit, User.login)
+            .join(User, User.id == UserEdit.user_id, isouter=True)
+            .where(UserEdit.comparison_row_id.in_(row_ids))
+            .order_by(UserEdit.edited_at.asc())
         )
-        for edit in edits_result.scalars().all():
+        for edit, author in edits_result.all():
             row_key = str(edit.comparison_row_id)
-            if edit.comment and edit.comment.strip():
-                user_edits_by_row.setdefault(row_key, []).append(edit.comment.strip())
+            comment = edit.comment.strip() if edit.comment and edit.comment.strip() else None
+            if comment:
+                user_edits_by_row.setdefault(row_key, []).append(comment)
+            # Запись фидбэка: показываем, если есть хоть что-то содержательное
+            # (отметка Да/Нет или комментарий).
+            if edit.user_result is not None or comment:
+                feedback_by_row.setdefault(row_key, []).append(
+                    {
+                        "author": author,
+                        "user_result": edit.user_result,
+                        "comment": comment,
+                        "created_at": edit.edited_at.isoformat() if edit.edited_at else None,
+                    }
+                )
 
     # Загружаем TZ review комментарии и матчим по имени характеристики
     tz_reviews_result = await db.execute(
@@ -428,23 +456,44 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
         "documents": documents,
         "available_documents": documents,
         "rows": [
-            {
-                "row_id": str(row.id),
-                "characteristic": row.characteristic,
-                "tz_value": row.tz_value,
-                "passport_value": row.passport_value,
-                "llm_result": row.llm_result,
-                "tz_evidence": row.tz_evidence
-                or _fallback_evidence("tz", row.tz_quote, row.tz_value),
-                "passport_evidence": row.passport_evidence
-                or _fallback_evidence("passport", row.passport_quote, row.passport_value),
-                "user_comments": _build_user_comments(
-                    str(row.id), row.characteristic,
-                    user_edits_by_row, tz_comments_by_name,
-                ),
-            }
+            _build_viewer_row(
+                row, user_edits_by_row, tz_comments_by_name, feedback_by_row
+            )
             for row in rows
         ],
+    }
+
+
+def _build_viewer_row(
+    row: ComparisonRow,
+    user_edits_by_row: dict[str, list[str]],
+    tz_comments_by_name: dict[str, list[str]],
+    feedback_by_row: dict[str, list[dict]],
+) -> dict:
+    row_id = str(row.id)
+    feedback = feedback_by_row.get(row_id, [])
+    # Итоговая отметка пользователя и её автор — из последней записи с явным
+    # user_result (отметкой Да/Нет).
+    last_result = next(
+        (fb for fb in reversed(feedback) if fb.get("user_result") is not None),
+        None,
+    )
+    return {
+        "row_id": row_id,
+        "characteristic": row.characteristic,
+        "tz_value": row.tz_value,
+        "passport_value": row.passport_value,
+        "llm_result": row.llm_result,
+        "tz_evidence": row.tz_evidence
+        or _fallback_evidence("tz", row.tz_quote, row.tz_value),
+        "passport_evidence": row.passport_evidence
+        or _fallback_evidence("passport", row.passport_quote, row.passport_value),
+        "user_comments": _build_user_comments(
+            row_id, row.characteristic, user_edits_by_row, tz_comments_by_name
+        ),
+        "user_feedback": feedback,
+        "user_result": last_result["user_result"] if last_result else row.user_result,
+        "user_result_author": last_result["author"] if last_result else None,
     }
 
 

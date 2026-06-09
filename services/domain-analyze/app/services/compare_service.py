@@ -43,6 +43,37 @@ def _unwrap_value(value: Any) -> Any:
     return value
 
 
+def _normalize_model(value: Any) -> str:
+    """Нормализует код модели для устойчивого сравнения: нижний регистр,
+    убираем пробелы и разделители (ГП-1500 / ГП 1500 / гп1500 → 'гп1500')."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[\s\-_.]+", "", value.strip().lower().replace("ё", "е"))
+
+
+def _filter_products_by_target_model(
+    tz_products: list[dict], passport_products: list[dict]
+) -> list[dict]:
+    """Если в ТЗ задана модель изделия, сравнивать нужно строго с ней:
+    оставляем в паспорте только изделия той же модели. Фильтруем лишь когда
+    цель однозначна (в ТЗ одна модель) и в паспорте есть совпадение по модели —
+    иначе возвращаем как есть, чтобы не потерять данные."""
+    target_models = {
+        _normalize_model(p.get("product_model"))
+        for p in tz_products
+        if _normalize_model(p.get("product_model"))
+    }
+    if len(target_models) != 1:
+        return passport_products
+
+    target = next(iter(target_models))
+    matching = [
+        p for p in passport_products
+        if _normalize_model(p.get("product_model")) == target
+    ]
+    return matching or passport_products
+
+
 def _collect_products_from_pages(pages: Any) -> list[dict]:
     if not isinstance(pages, list):
         return []
@@ -255,6 +286,25 @@ def _derive_matched_terms(*parts: Any) -> list[str]:
     return _dedupe_strings(tokens[:8])
 
 
+def _matched_text_consistent_with_quote(
+    matched_text: str | None, quote_text: str | None
+) -> bool:
+    """True, если matched_text согласуется с quote_text (один — подстрока другого).
+
+    Фронтенд прячет спаны, где matched_text != quote_text (считает их «обманчивым
+    якорём»). В таблицах геометрия находит строку по названию характеристики, а
+    quote_text — это значение, поэтому такие корректные привязки терялись и в
+    паспорте отображалась лишь одна характеристика. Тут — защита на стороне
+    сравнения: если несогласованно, matched_text не пробрасываем."""
+    if not matched_text or not quote_text:
+        return False
+    norm_m = re.sub(r"\s+", " ", str(matched_text).strip()).lower().replace("ё", "е")
+    norm_q = re.sub(r"\s+", " ", str(quote_text).strip()).lower().replace("ё", "е")
+    if not norm_m or not norm_q:
+        return False
+    return norm_m == norm_q or norm_q in norm_m or norm_m in norm_q
+
+
 def _build_span_payload(
     *,
     fragment_type: str,
@@ -311,6 +361,12 @@ def _normalize_reference_span(reference: Any, fallback_quote: str | None) -> dic
             confidence = reference.get("confidence")
             if not isinstance(confidence, (int, float)):
                 confidence = 0.58
+        raw_matched = reference.get("matched_text")
+        matched_text = (
+            raw_matched
+            if _matched_text_consistent_with_quote(raw_matched, quote_text)
+            else None
+        )
         return _build_span_payload(
             fragment_type=fragment_type,
             locator_strategy=str(locator_strategy),
@@ -320,7 +376,7 @@ def _normalize_reference_span(reference: Any, fallback_quote: str | None) -> dic
             locator_text=locator_text,
             bbox=bbox,
             confidence=float(confidence),
-            matched_text=reference.get("matched_text"),
+            matched_text=matched_text,
         )
 
     if isinstance(reference, str):
@@ -457,9 +513,53 @@ def _build_evidence_payload(
     }
 
 
+def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict]:
+    """Сравнивает ОДНО изделие ТЗ с ОДНИМ изделием паспорта, объединяя
+    характеристики по имени. Используется, когда с каждой стороны ровно одно
+    изделие — тогда название изделия не важно (в паспорте оно часто пустое),
+    и сравнивать надо напрямую, иначе характеристики задваиваются."""
+    product_name = (
+        tz_product.get("product_name")
+        or passport_product.get("product_name")
+        or "Неизвестное изделие"
+    )
+    tz_chars = tz_product.get("characteristics", []) or []
+    passport_chars = passport_product.get("characteristics", []) or []
+    tz_map = {c.get("name"): c for c in tz_chars if isinstance(c, dict) and c.get("name")}
+    passport_map = {
+        c.get("name"): c for c in passport_chars if isinstance(c, dict) and c.get("name")
+    }
+    items: list[dict] = []
+    for char_name in _ordered_characteristics(tz_chars, passport_chars):
+        tz_entry = tz_map.get(char_name, {})
+        passport_entry = passport_map.get(char_name, {})
+        items.append(
+            {
+                "product_name": product_name,
+                "characteristic": char_name,
+                "tz_value": tz_entry.get("value"),
+                "passport_value": passport_entry.get("value"),
+                "tz_references": tz_entry.get("references", []),
+                "passport_references": passport_entry.get("references", []),
+            }
+        )
+    return items
+
+
 def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
     tz_products = _normalize_products(tz_data)
     passport_products = _normalize_products(passport_data)
+    # Если в ТЗ задана конкретная модель — сравниваем строго с ней,
+    # отбрасывая из паспорта изделия других моделей.
+    passport_products = _filter_products_by_target_model(tz_products, passport_products)
+
+    # Один-к-одному: по одному изделию с каждой стороны — сравниваем их как пару,
+    # НЕ завязываясь на совпадение product_name (в паспорте оно часто пустое →
+    # иначе ТЗ и паспорт попадают в разные «изделия» и каждая характеристика
+    # дублируется: один ряд только с ТЗ, второй только с паспортом).
+    if len(tz_products) == 1 and len(passport_products) == 1:
+        return _compare_product_pair(tz_products[0], passport_products[0])
+
     ordered_products = _ordered_products(tz_products, passport_products)
 
     tz_map = _build_char_map(tz_products)

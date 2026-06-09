@@ -174,7 +174,11 @@ def _build_target_characteristics_appendix(
     if file_type != "passport" or not target_characteristics:
         return ""
 
-    compact_items = []
+    # ВАЖНО: НЕ передаём в паспорт значения из ТЗ (item["value"]).
+    # Если показать модели ожидаемое значение, она копирует его вместо чтения
+    # паспорта — паспортные значения получались равными ТЗ байт-в-байт, даже когда
+    # в реальном паспорте стояли другие числа. Передаём ТОЛЬКО названия характеристик.
+    target_names: list[str] = []
     product_model: str | None = None
     product_name: str | None = None
     for item in target_characteristics:
@@ -184,38 +188,53 @@ def _build_target_characteristics_appendix(
             product_model = item.get("product_model")
         if not product_name:
             product_name = item.get("product_name")
-        compact_items.append(
-            {
-                "product_name": item.get("product_name"),
-                "product_model": item.get("product_model"),
-                "name": item.get("name"),
-                "value": item.get("value"),
-            }
-        )
-    if not compact_items:
+        name = item.get("name")
+        if isinstance(name, str) and name.strip():
+            target_names.append(name.strip())
+    if not target_names:
         return ""
 
-    targets_json = json.dumps(compact_items, ensure_ascii=False, indent=2)
+    targets_json = json.dumps(target_names, ensure_ascii=False, indent=2)
 
-    # Формируем подсказку о модели для точного поиска в многоколоночных таблицах
+    # Формируем подсказку о модели для точного поиска в многоколоночных/многострочных
+    # таблицах. Отдельно разбираем габаритные размеры — они часто лежат в отдельной
+    # таблице с краткими заголовками (L/H/W) и берутся не из той строки модели.
     model_hint = ""
     if product_model:
         model_hint = (
-            f"\nIMPORTANT: The passport may contain a table with multiple models. "
-            f"Extract values specifically for model '{product_model}'"
+            f"\nIMPORTANT — MODEL SELECTION. The passport usually lists MANY models. "
+            f"Extract values strictly for model '{product_model}'"
             + (f" (product: '{product_name}')" if product_name else "")
-            + ". If the table has columns for different models, use only the column "
-            f"that corresponds to '{product_model}'. Do not take values from other model columns.\n"
+            + ". Rules for model-keyed tables:\n"
+            f"- A value belongs to the model written ON THE SAME ROW (or in the SAME COLUMN). "
+            f"Do NOT take the value from a neighbouring model's row/column — values for "
+            f"adjacent models often look similar, so align the row to '{product_model}' EXACTLY.\n"
+            f"- Match the model code allowing spacing/separator differences "
+            f"(e.g. 'ХМ-3,2/4Т-0.18-G1' == 'ХМ 3,2/4Т-0,18-G1').\n"
+            "- DIMENSIONS (Габаритные размеры / габариты): these are frequently in a SEPARATE "
+            "table whose columns use short headers like 'L', 'H', 'W', 'Длина', 'Высота', "
+            "'Ширина', 'ДхШхВ'. Find the row for the requested model in THAT table and compose "
+            "the value as L×H×W (length×width×height) from that exact row. If multiple tables "
+            "give dimensions, prefer the one keyed by the model code.\n"
+            f"- If you cannot reliably identify the value for '{product_model}', return "
+            "\"value\": null rather than guessing from another model.\n"
         )
 
+    count = len(target_names)
     return (
-        "\n\nPassport extraction scope:\n"
-        "Extract only the characteristics listed below. Do not extract unrelated passport "
-        "characteristics. Keep the existing JSON schema with products and characteristics. "
-        "For each target, find the corresponding value in the passport and preserve references/evidence "
-        "when available. If a target is not present in the passport, omit it rather than adding unrelated data.\n"
+        "\n\n=== PASSPORT EXTRACTION SCOPE (overrides any earlier 'extract ALL' instruction) ===\n"
+        f"Below is a fixed list of {count} characteristic NAMES. Your output MUST contain "
+        f"EXACTLY these {count} characteristics — no more, no fewer — one object per name, "
+        "in the SAME ORDER, using each name VERBATIM as the `name` field. "
+        "Ignore every other characteristic in the passport; extract ONLY these.\n"
+        "For each name, read its value AS WRITTEN IN THE PASSPORT for the requested model. "
+        "You are NOT given the expected values — read them from the passport. "
+        "Never invent, guess, or copy a value from the requirement: every value MUST come "
+        "from the passport, and its quote_text/reference must contain that exact value. "
+        "If a characteristic is genuinely absent from the passport, STILL include it with "
+        "\"value\": null and an empty references array — do NOT drop it from the list.\n"
         f"{model_hint}"
-        f"Target TZ characteristics:\n{targets_json}"
+        f"The {count} characteristic names to return (verbatim, in order):\n{targets_json}"
     )
 
 

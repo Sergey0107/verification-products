@@ -55,6 +55,12 @@ class UserEdit(Base):
         server_default=text("gen_random_uuid()"),
     )
     comparison_row_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    user_result = Column(Boolean, nullable=True)
     comment = Column(Text)
     edited_at = Column(DateTime, server_default=func.now(), nullable=False)
 

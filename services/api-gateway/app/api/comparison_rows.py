@@ -14,6 +14,7 @@ router = APIRouter()
 
 class UserResultPayload(BaseModel):
     user_result: bool
+    comment: str | None = None
 
 
 class CommentPayload(BaseModel):
@@ -41,6 +42,17 @@ async def set_user_result(
     await db.execute(
         update(ComparisonRow).where(ComparisonRow.id == row_uuid).values(user_result=payload.user_result)
     )
+    # Фиксируем отметку (Да/Нет) вместе с автором как отдельную запись фидбэка,
+    # чтобы во viewer-context показать, кто и что выбрал.
+    comment = payload.comment.strip() if payload.comment and payload.comment.strip() else None
+    db.add(
+        UserEdit(
+            comparison_row_id=row_uuid,
+            user_id=current_user.id,
+            user_result=payload.user_result,
+            comment=comment,
+        )
+    )
     await db.commit()
     return {"ok": True}
 
@@ -66,6 +78,7 @@ async def add_comment(
 
     edit = UserEdit(
         comparison_row_id=row.id,
+        user_id=current_user.id,
         comment=payload.comment,
     )
     db.add(edit)

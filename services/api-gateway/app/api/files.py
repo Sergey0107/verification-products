@@ -297,7 +297,12 @@ async def preview_file(
                 return StreamingResponse(
                     render_resp.aiter_bytes(),
                     media_type="application/pdf",
-                    headers={"Content-Disposition": "inline; filename=preview.pdf"},
+                    headers={
+                        "Content-Disposition": "inline; filename=preview.pdf",
+                        # Превью одного файла не меняется — разрешаем браузеру
+                        # кэшировать, чтобы повторные открытия были мгновенными.
+                        "Cache-Control": "private, max-age=3600",
+                    },
                 )
             await render_resp.aclose()
             await client.aclose()
