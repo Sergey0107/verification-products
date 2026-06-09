@@ -21,6 +21,25 @@ class CommentPayload(BaseModel):
     comment: str
 
 
+async def _get_or_create_user_edit(
+    db: AsyncSession, row_id, user_id
+) -> UserEdit:
+    """Возвращает текущую запись фидбэка пользователя по строке (последнюю) или
+    создаёт новую. Одно действие пользователя = одна запись (отметка + коммент),
+    а не две раздельные."""
+    result = await db.execute(
+        select(UserEdit)
+        .where(UserEdit.comparison_row_id == row_id)
+        .where(UserEdit.user_id == user_id)
+        .order_by(UserEdit.edited_at.desc())
+    )
+    edit = result.scalars().first()
+    if edit is None:
+        edit = UserEdit(comparison_row_id=row_id, user_id=user_id)
+        db.add(edit)
+    return edit
+
+
 @router.post("/comparison-rows/{row_id}/user-result")
 async def set_user_result(
     row_id: str,
@@ -42,17 +61,14 @@ async def set_user_result(
     await db.execute(
         update(ComparisonRow).where(ComparisonRow.id == row_uuid).values(user_result=payload.user_result)
     )
-    # Фиксируем отметку (Да/Нет) вместе с автором как отдельную запись фидбэка,
-    # чтобы во viewer-context показать, кто и что выбрал.
+    # Одно действие пользователя = ОДНА запись фидбэка. Обновляем существующую
+    # запись этого пользователя по строке (или создаём), а не плодим новые —
+    # иначе отметка и комментарий расходились на две записи.
     comment = payload.comment.strip() if payload.comment and payload.comment.strip() else None
-    db.add(
-        UserEdit(
-            comparison_row_id=row_uuid,
-            user_id=current_user.id,
-            user_result=payload.user_result,
-            comment=comment,
-        )
-    )
+    edit = await _get_or_create_user_edit(db, row_uuid, current_user.id)
+    edit.user_result = payload.user_result
+    if comment is not None:
+        edit.comment = comment
     await db.commit()
     return {"ok": True}
 
@@ -76,11 +92,9 @@ async def add_comment(
     if row is None:
         raise HTTPException(status_code=404, detail="Row not found")
 
-    edit = UserEdit(
-        comparison_row_id=row.id,
-        user_id=current_user.id,
-        comment=payload.comment,
-    )
-    db.add(edit)
+    # Прикрепляем комментарий к существующей записи фидбэка пользователя по этой
+    # строке (или создаём), чтобы отметка и комментарий жили в ОДНОЙ записи.
+    edit = await _get_or_create_user_edit(db, row.id, current_user.id)
+    edit.comment = payload.comment
     await db.commit()
     return {"ok": True}
