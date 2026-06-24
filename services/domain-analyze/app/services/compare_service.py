@@ -456,6 +456,7 @@ def _build_evidence_payload(
     references: list[Any],
     quote: str | None,
     value: Any,
+    characteristic_name: str | None = None,
 ) -> dict[str, Any]:
     source_spans: list[dict[str, Any]] = []
     for reference in references:
@@ -503,7 +504,11 @@ def _build_evidence_payload(
         None,
     )
     page_anchor = next((span for span in source_spans if span.get("page_number")), None)
-    fallback_quote = quote or (str(value) if value is not None else None)
+    raw_fallback = quote or (str(value) if value is not None else None)
+    if not quote and raw_fallback and characteristic_name:
+        fallback_quote = f"{characteristic_name} {raw_fallback}"
+    else:
+        fallback_quote = raw_fallback
     locator_strategy = (
         exact_span.get("locator_strategy")
         if exact_span
@@ -666,17 +671,20 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
 def _attach_evidence_to_comparison(item: dict[str, Any], comparison: dict[str, Any]) -> dict[str, Any]:
     tz_quote = comparison.get("tz_quote")
     passport_quote = comparison.get("passport_quote")
+    char_name = item.get("characteristic") or comparison.get("characteristic")
     comparison["tz_evidence"] = _build_evidence_payload(
         document_type="tz",
         references=item.get("tz_references", []),
         quote=tz_quote if isinstance(tz_quote, str) else None,
         value=item.get("tz_value"),
+        characteristic_name=char_name,
     )
     comparison["passport_evidence"] = _build_evidence_payload(
         document_type="passport",
         references=item.get("passport_references", []),
         quote=passport_quote if isinstance(passport_quote, str) else None,
         value=item.get("passport_value"),
+        characteristic_name=char_name,
     )
     return comparison
 
