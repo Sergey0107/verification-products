@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+﻿from datetime import datetime, timezone
 import re
 from uuid import UUID
 
@@ -33,6 +33,23 @@ class TzReviewDecision(BaseModel):
 
 class TzReviewSaveRequest(BaseModel):
     items: list[TzReviewDecision] = Field(default_factory=list)
+
+
+class TzMarkOffset(BaseModel):
+    dx: float
+    dy: float
+
+
+class TzMarkUpdate(BaseModel):
+    row_id: str
+    # Смещение метки в пикселях (от исходной позиции). null — сброс к оригиналу.
+    offset: TzMarkOffset | None = None
+    # Отредактированный текст метки. null — не менять/сброс к исходному.
+    custom_text: str | None = None
+
+
+class TzMarksSaveRequest(BaseModel):
+    marks: list[TzMarkUpdate] = Field(default_factory=list)
 
 
 def _extract_page_number(text: str | None) -> int | None:
@@ -303,6 +320,14 @@ def _build_error_payload(prefix: str, detail: str | None) -> tuple[str | None, s
     return summary, full_detail
 
 
+def _utc_isoformat(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 async def build_analysis_items(db: AsyncSession, user: User | None = None) -> list[dict]:
     query = select(
         Analysis.id,
@@ -311,13 +336,14 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
         Analysis.extraction_backend,
         Analysis.task_id,
         Analysis.product_model,
+        Analysis.completed_at,
     )
     if user is not None:
         query = query.where(Analysis.user_id == user.id)
     rows = await db.execute(query.order_by(Analysis.created_at.desc()))
     analyses = rows.all()
     items = []
-    for analysis_id, status, created_at, extraction_backend, task_id, product_model in analyses:
+    for analysis_id, status, created_at, extraction_backend, task_id, product_model, completed_at in analyses:
         files_rows = await db.execute(
             select(
                 FileModel.id,
@@ -371,7 +397,8 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
                 "status_key": _status_key(status),
                 "extraction_backend": extraction_backend,
                 "extraction_backend_label": extraction_backend_label(extraction_backend),
-                "created_at": created_at.isoformat() if created_at else None,
+                "created_at": _utc_isoformat(created_at),
+                "completed_at": _utc_isoformat(completed_at),
                 "error_message": _truncate_error(error_detail),
                 "error_summary": error_summary,
                 "error_detail": error_detail,
@@ -494,6 +521,7 @@ def _build_viewer_row(
         "user_feedback": feedback,
         "user_result": last_result["user_result"] if last_result else row.user_result,
         "user_result_author": last_result["author"] if last_result else None,
+        "user_tz_mark": row.user_tz_mark,
     }
 
 
@@ -897,3 +925,46 @@ async def get_viewer_context(
     analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     return await build_viewer_context_payload(analysis_uuid, db)
+
+
+@router.put("/analyses/{analysis_id}/tz-marks")
+async def save_tz_marks(
+    analysis_id: str,
+    payload: TzMarksSaveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Сохраняет пользовательские корректировки меток ТЗ во вьювере: смещение
+    (drag) и отредактированный текст. Перезаписывает user_tz_mark у comparison_row.
+    Метки без смещения и текста — сбрасываются (null), чтобы вернуть оригинал."""
+    analysis_uuid = parse_uuid(analysis_id)
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
+
+    # Валидируем, что все row_id принадлежат этому анализу.
+    rows_result = await db.execute(
+        select(ComparisonRow.id).where(ComparisonRow.analysis_id == analysis_uuid)
+    )
+    valid_ids = {str(row_id) for (row_id,) in rows_result.all()}
+
+    updated = 0
+    for mark in payload.marks:
+        if mark.row_id not in valid_ids:
+            continue
+        if mark.offset is None and (mark.custom_text is None or mark.custom_text == ""):
+            mark_value = None  # нет корректировок — сбрасываем к оригиналу
+        else:
+            mark_value: dict | None = {}
+            if mark.offset is not None:
+                mark_value["offset"] = {"dx": mark.offset.dx, "dy": mark.offset.dy}
+            if mark.custom_text is not None:
+                mark_value["custom_text"] = mark.custom_text
+        await db.execute(
+            update(ComparisonRow)
+            .where(ComparisonRow.id == parse_uuid(mark.row_id))
+            .where(ComparisonRow.analysis_id == analysis_uuid)
+            .values(user_tz_mark=mark_value)
+        )
+        updated += 1
+
+    await db.commit()
+    return {"ok": True, "updated": updated}

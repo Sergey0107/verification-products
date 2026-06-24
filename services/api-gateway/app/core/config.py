@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     FILE_SERVICE_URL: str = "http://file-service:8000"
     S3_ENDPOINT: str = "https://storage.yandexcloud.net"
     BUCKET_NAME: str = ""
-    EXTRACTION_TIMEOUT_SECONDS: int = 600
+    EXTRACTION_TIMEOUT_SECONDS: int = 2400
     CELERY_BROKER_URL: str = "amqp://guest:guest@rabbitmq:5672//"
     CELERY_RESULT_BACKEND: str = "rpc://"
     EXTRACTION_DEBUG_DIR: str = "/tmp"

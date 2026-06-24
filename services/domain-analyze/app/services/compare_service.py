@@ -51,25 +51,56 @@ def _normalize_model(value: Any) -> str:
     return re.sub(r"[\s\-_.]+", "", value.strip().lower().replace("ё", "е"))
 
 
+def _model_size_cores(value: Any) -> set[str]:
+    """Числовое ядро типоразмера — самая стабильная часть кода между документами.
+    Префикс (5Кс / КС / 1Кс) и исполнение (/4) различаются, ядро 'подача-напор'
+    совпадает точно. 'КС 50-110/4' → {'50-110/4', '50-110'} ; '1Кс50-110' → {'50-110'}.
+    Совпадение по ядру '50-110' надёжно связывает модель ТЗ с моделью паспорта."""
+    if not isinstance(value, str):
+        return set()
+    norm = value.lower().replace("ё", "е").replace("–", "-").replace("—", "-").replace("х", "x")
+    cores: set[str] = set()
+    for match in re.findall(r"\d+(?:[-/x]\d+)+", norm):
+        cores.add(match)
+        base = match.split("/", 1)[0]
+        if "-" in base:
+            cores.add(base)
+    return cores
+
+
+def _models_match(tz_model: Any, passport_model: Any) -> bool:
+    """Модели совпадают, если: (1) нормализованные строки равны/вложены, ИЛИ
+    (2) есть общее числовое ядро типоразмера (устойчиво к разным префиксам)."""
+    norm_tz = _normalize_model(tz_model)
+    norm_pp = _normalize_model(passport_model)
+    if norm_tz and norm_pp and (norm_tz == norm_pp or norm_tz in norm_pp or norm_pp in norm_tz):
+        return True
+    tz_cores = _model_size_cores(tz_model)
+    pp_cores = _model_size_cores(passport_model)
+    return bool(tz_cores & pp_cores)
+
+
 def _filter_products_by_target_model(
     tz_products: list[dict], passport_products: list[dict]
 ) -> list[dict]:
     """Если в ТЗ задана модель изделия, сравнивать нужно строго с ней:
-    оставляем в паспорте только изделия той же модели. Фильтруем лишь когда
-    цель однозначна (в ТЗ одна модель) и в паспорте есть совпадение по модели —
-    иначе возвращаем как есть, чтобы не потерять данные."""
-    target_models = {
-        _normalize_model(p.get("product_model"))
+    оставляем в паспорте только изделия той же модели. Совпадение определяем
+    по числовому ядру типоразмера (устойчиво к разным префиксам: КС 50-110/4 ↔
+    1Кс50-110). Фильтруем лишь когда цель однозначна (в ТЗ одна модель) и в
+    паспорте есть совпадение — иначе возвращаем как есть, чтобы не потерять данные."""
+    target_models = [
+        p.get("product_model")
         for p in tz_products
         if _normalize_model(p.get("product_model"))
-    }
-    if len(target_models) != 1:
+    ]
+    unique_targets = {_normalize_model(m) for m in target_models}
+    if len(unique_targets) != 1:
         return passport_products
 
-    target = next(iter(target_models))
+    target = target_models[0]
     matching = [
         p for p in passport_products
-        if _normalize_model(p.get("product_model")) == target
+        if _models_match(target, p.get("product_model"))
     ]
     return matching or passport_products
 
@@ -333,12 +364,15 @@ def _build_span_payload(
 
 def _normalize_reference_span(reference: Any, fallback_quote: str | None) -> dict[str, Any] | None:
     if isinstance(reference, dict):
-        bbox = _infer_bbox(reference.get("bbox"))
+        unverified = reference.get("position_unverified") is True
+        bbox = _infer_bbox(reference.get("bbox")) if not unverified else None
         page = reference.get("page")
         if isinstance(page, str) and page.isdigit():
             page = int(page)
         if not isinstance(page, int) or page <= 0:
             page = _extract_page_number(str(reference.get("locator_text") or reference.get("anchor_text") or ""))
+        if unverified:
+            page = None
         anchor_text = reference.get("anchor_text") or reference.get("text") or reference.get("locator_text")
         quote_text = reference.get("quote_text") or fallback_quote
         locator_text = reference.get("locator_text") or anchor_text or quote_text

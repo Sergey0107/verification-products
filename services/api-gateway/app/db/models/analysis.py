@@ -20,6 +20,7 @@ class Analysis(Base):
     product_model = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime, nullable=True)
 
 
 class ComparisonRow(Base):
@@ -40,8 +41,12 @@ class ComparisonRow(Base):
     tz_evidence = Column(JSONB)
     passport_evidence = Column(JSONB)
     llm_result = Column(Boolean)
-    user_result = Column(Boolean, server_default=text("true"))
+    user_result = Column(Boolean, nullable=True)
     note = Column(String)
+    # Пользовательская корректировка метки ТЗ во вьювере: смещение (offset) и
+    # отредактированный текст (custom_text). Перезаписывает позицию/подпись метки,
+    # которая изначально пришла из геометрии. Оригинальный tz_evidence не теряется.
+    user_tz_mark = Column(JSONB, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 

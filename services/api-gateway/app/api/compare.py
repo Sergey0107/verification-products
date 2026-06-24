@@ -66,7 +66,7 @@ async def compare_callback(payload: dict, db: AsyncSession = Depends(get_db)):
                 tz_evidence=item.get("tz_evidence"),
                 passport_evidence=item.get("passport_evidence"),
                 llm_result=item.get("is_match"),
-                user_result=True,
+                user_result=None,
                 note=item.get("note"),
             )
             db.add(row)
@@ -78,7 +78,7 @@ async def compare_callback(payload: dict, db: AsyncSession = Depends(get_db)):
         await db.execute(
             update(Analysis)
             .where(Analysis.id == analysis_id)
-            .values(status="ready", updated_at=datetime.utcnow())
+            .values(status="ready", updated_at=datetime.utcnow(), completed_at=datetime.utcnow())
         )
     else:
         await db.execute(

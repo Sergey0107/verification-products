@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -100,6 +101,66 @@ def _normalize_docling_extraction(result_payload: dict) -> None:
     extraction["products"] = _dedupe_products(products)
 
 
+def _looks_like_characteristic(item: object) -> bool:
+    """Элемент products — это «плоская» характеристика (name+value),
+    а не изделие (нет вложенного characteristics)."""
+    if not isinstance(item, dict):
+        return False
+    if isinstance(item.get("characteristics"), list):
+        return False
+    has_name = isinstance(item.get("name"), str) and item.get("name").strip()
+    has_value = "value" in item
+    return bool(has_name and has_value)
+
+
+def _wrap_flat_products(products: list) -> list:
+    """Некоторые модели возвращают products как ПЛОСКИЙ список характеристик
+    (каждый элемент — name+value), вместо вложенной структуры
+    products[i].characteristics[]. Тогда характеристики «теряются» (парсер ищет
+    .characteristics и находит 0). Оборачиваем плоский список в одно изделие."""
+    if not isinstance(products, list) or not products:
+        return products
+    flat = [p for p in products if _looks_like_characteristic(p)]
+    # Считаем формат плоским, только если БОЛЬШИНСТВО элементов — характеристики,
+    # и ни у одного нет вложенного characteristics (иначе это смешанный/нормальный).
+    if len(flat) >= max(1, len(products) // 2) and not any(
+        isinstance(p, dict) and isinstance(p.get("characteristics"), list)
+        for p in products
+    ):
+        # Берём название/модель из первого элемента, если он их содержит
+        product_name = None
+        product_model = None
+        for p in products:
+            if isinstance(p, dict):
+                product_name = product_name or p.get("product_name")
+                product_model = product_model or p.get("product_model")
+        return [
+            {
+                "product_name": product_name,
+                "product_model": product_model,
+                "characteristics": flat,
+            }
+        ]
+    return products
+
+
+def _normalize_flat_products_in_place(result_payload: dict) -> bool:
+    """Оборачивает плоский список характеристик в изделие. Возвращает True, если
+    нормализация применена. Чинит и result.products, и extraction.products."""
+    if not isinstance(result_payload, dict):
+        return False
+    applied = False
+    for root_key in ("result", "extraction"):
+        root = result_payload.get(root_key)
+        if isinstance(root, dict) and isinstance(root.get("products"), list):
+            wrapped = _wrap_flat_products(root["products"])
+            if wrapped is not root["products"] and wrapped != root["products"]:
+                root["products"] = wrapped
+                applied = True
+    # Случай, когда result сам = {products: [...]} уже покрыт выше.
+    return applied
+
+
 def _build_knowledge_base_prompt_appendix(file_type: str) -> str:
     if file_type not in {"tz", "passport"}:
         return ""
@@ -167,6 +228,51 @@ def _build_product_model_appendix(file_type: str, product_model: str | None) -> 
     )
 
 
+def _model_size_cores(product_model: str) -> list[str]:
+    """Извлекает числовое ядро типоразмера — самую стабильную часть кода модели
+    между ТЗ и паспортом. Префиксы (5Кс / КС / 1Кс) и исполнение (/4) различаются
+    от документа к документу, а ядро «подача-напор» совпадает точно.
+    '5Кс — 5х4 (КС 50-110/4)' → ['50-110/4', '50-110'] ; '1Кс50-110' → ['50-110']."""
+    norm = (
+        product_model.lower()
+        .replace("ё", "е")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("х", "x")
+    )
+    cores: list[str] = []
+    for match in re.findall(r"\d+(?:[-/x]\d+)+", norm):
+        if match not in cores:
+            cores.append(match)
+        # Основа без хвостового исполнения: 50-110/4 → 50-110
+        base = match.split("/", 1)[0]
+        if "-" in base and base not in cores:
+            cores.append(base)
+    # Сортируем по длине убыв.: более специфичные ядра (50-110/4) раньше общих (50-110)
+    return sorted(cores, key=len, reverse=True)
+
+
+def _model_aliases(product_model: str) -> list[str]:
+    """Разбивает составной код модели на отдельные распознаваемые варианты.
+    '5Кс — 5х4 (КС 50-110/4)' → ['5Кс — 5х4 (КС 50-110/4)', 'КС 50-110/4', '5Кс — 5х4', '50-110/4', '50-110'].
+    Паспорт обычно использует один из вариантов (часто только числовое ядро)."""
+    aliases: list[str] = [product_model.strip()]
+    # Коды в скобках — частый альтернативный шифр модели.
+    for match in re.findall(r"\(([^)]+)\)", product_model):
+        cleaned = match.strip()
+        if cleaned and cleaned not in aliases:
+            aliases.append(cleaned)
+    # Часть до скобки — основной шифр.
+    before_paren = re.sub(r"\([^)]*\)", "", product_model).strip(" —-–")
+    if before_paren and before_paren not in aliases:
+        aliases.append(before_paren)
+    # Числовое ядро типоразмера — самый устойчивый идентификатор между документами.
+    for core in _model_size_cores(product_model):
+        if core not in aliases:
+            aliases.append(core)
+    return [a for a in aliases if a]
+
+
 def _build_target_characteristics_appendix(
     file_type: str,
     target_characteristics: list[dict] | None,
@@ -201,23 +307,65 @@ def _build_target_characteristics_appendix(
     # таблице с краткими заголовками (L/H/W) и берутся не из той строки модели.
     model_hint = ""
     if product_model:
+        model_aliases = _model_aliases(product_model)
+        aliases_text = (
+            f" Equivalent model codes to recognise: {', '.join(repr(a) for a in model_aliases)}."
+            if len(model_aliases) > 1
+            else ""
+        )
+        size_cores = _model_size_cores(product_model)
+        core_hint = ""
+        if size_cores:
+            core_hint = (
+                f"\n- KEY IDENTIFIER — the numeric size code (типоразмер) {', '.join(repr(c) for c in size_cores)} "
+                f"is the MOST RELIABLE way to find the model. The LETTER PREFIX often differs between "
+                f"documents (e.g. requirement says 'КС 50-110/4' but the passport writes the SAME pump "
+                f"as '1Кс50-110' or '5Кс50-110') — match by the numeric core '{size_cores[0].split('/')[0]}' "
+                f"and IGNORE prefix/suffix differences. A passport row whose code contains '{size_cores[0].split('/')[0]}' "
+                f"is the right one even if its prefix is not identical.\n"
+            )
         model_hint = (
             f"\nIMPORTANT — MODEL SELECTION. The passport usually lists MANY models. "
             f"Extract values strictly for model '{product_model}'"
             + (f" (product: '{product_name}')" if product_name else "")
-            + ". Rules for model-keyed tables:\n"
+            + "."
+            + aliases_text
+            + core_hint
+            + " Rules for model-keyed tables:\n"
+            f"- ALL extracted values MUST come from the SAME model row/column. "
+            f"It is a serious error to take Производительность from one model and Вес from another — "
+            f"every characteristic must describe the SAME physical pump '{product_model}'.\n"
             f"- A value belongs to the model written ON THE SAME ROW (or in the SAME COLUMN). "
             f"Do NOT take the value from a neighbouring model's row/column — values for "
             f"adjacent models often look similar, so align the row to '{product_model}' EXACTLY.\n"
-            f"- Match the model code allowing spacing/separator differences "
-            f"(e.g. 'ХМ-3,2/4Т-0.18-G1' == 'ХМ 3,2/4Т-0,18-G1').\n"
+            f"- Match the model code allowing spacing/separator/prefix differences "
+            f"(e.g. 'ХМ-3,2/4Т-0.18-G1' == 'ХМ 3,2/4Т-0,18-G1'; 'КС 50-110/4' == '1Кс50-110').\n"
             "- DIMENSIONS (Габаритные размеры / габариты): these are frequently in a SEPARATE "
             "table whose columns use short headers like 'L', 'H', 'W', 'Длина', 'Высота', "
             "'Ширина', 'ДхШхВ'. Find the row for the requested model in THAT table and compose "
             "the value as L×H×W (length×width×height) from that exact row. If multiple tables "
             "give dimensions, prefer the one keyed by the model code.\n"
+            "- WEIGHT vs MASS IN DIMENSIONS TABLE: a dimensions/sizing table often has a "
+            "'Масса, кг' column at the end. This is the mass of the BARE PUMP UNIT, which is "
+            "NOT the same as 'Вес насоса' / 'Вес агрегата' / 'Общий вес' requested in the "
+            "requirements. If the requirement asks for 'Вес насоса' or 'Масса насоса', look for "
+            "a SEPARATE weight specification (often in the detailed technical data / ТТХ section, "
+            "NOT in the sizing table). Only use the dimensions table 'Масса' column if no other "
+            "weight source exists AND the requirement specifically asks for a bare-pump mass.\n"
             f"- If you cannot reliably identify the value for '{product_model}', return "
             "\"value\": null rather than guessing from another model.\n"
+        )
+    else:
+        # Модель не задана — но все характеристики всё равно должны относиться к
+        # ОДНОМУ изделию, а не быть собраны из разных моделей каталога.
+        model_hint = (
+            "\nIMPORTANT — SINGLE MODEL CONSISTENCY. The passport may list MANY pump models. "
+            "No specific target model was given, so FIRST identify the single model whose "
+            "characteristics best match the requested list, then extract ALL values from THAT "
+            "ONE model only. Never combine values from different models/pages: it is a serious "
+            "error to take Производительность from one model and Вес from another. Every "
+            "characteristic must describe the SAME physical product. Prefer the model that has "
+            "the most of the requested characteristics on the same page/table.\n"
         )
 
     count = len(target_names)
@@ -312,6 +460,11 @@ def run_extraction_task(
         _raise_for_status_with_detail(extract_resp, "Extraction service")
         result_payload = extract_resp.json()
         _normalize_docling_extraction(result_payload)
+        if _normalize_flat_products_in_place(result_payload):
+            logger.info(
+                "Wrapped flat characteristics list into a product (analysis=%s file_type=%s)",
+                analysis_id, file_type,
+            )
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)
