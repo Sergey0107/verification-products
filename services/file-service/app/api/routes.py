@@ -30,6 +30,19 @@ def _is_docx_document(name: str, content_type: str | None) -> bool:
     )
 
 
+def _is_excel_document(name: str, content_type: str | None) -> bool:
+    suffix = Path(name).suffix.lower()
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    return (
+        suffix in {".xls", ".xlsx", ".xlsm"}
+        or normalized
+        in {
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+    )
+
+
 def _is_pdf_document(name: str, content_type: str | None) -> bool:
     suffix = Path(name).suffix.lower()
     normalized = (content_type or "").split(";", 1)[0].strip().lower()
@@ -159,8 +172,15 @@ async def preview_file(
     content_type: str | None = None,
 ):
     safe_name = _safe_download_name(name)
-    if not (_is_pdf_document(safe_name, content_type) or _is_docx_document(safe_name, content_type)):
-        raise HTTPException(status_code=415, detail="Preview supports PDF and Word documents only")
+    if not (
+        _is_pdf_document(safe_name, content_type)
+        or _is_docx_document(safe_name, content_type)
+        or _is_excel_document(safe_name, content_type)
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="Preview supports PDF, Word and Excel documents only",
+        )
 
     try:
         Path(settings.TMP_DIR).mkdir(parents=True, exist_ok=True)
