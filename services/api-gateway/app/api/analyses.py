@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -407,6 +407,64 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
     return items
 
 
+async def _compute_processing_seconds(
+    analysis_id: UUID, db: AsyncSession
+) -> float | None:
+    """Активное время обработки в секундах: от загрузки документов до статуса
+    «готово», за вычетом паузы на ручную проверку ТЗ.
+
+    Пауза = период между готовностью ТЗ к проверке (extraction_job(tz).completed_at)
+    и запуском сравнения после подтверждения пользователем (comparison_job.created_at).
+    Пока документ в статусе tz_review (юзер ещё не подтвердил) — отсчёт на паузе."""
+    analysis = (
+        await db.execute(
+            select(Analysis.created_at, Analysis.completed_at, Analysis.status).where(
+                Analysis.id == analysis_id
+            )
+        )
+    ).one_or_none()
+    if analysis is None:
+        return None
+    created_at, completed_at, status = analysis
+    if created_at is None:
+        return None
+
+    tz_ready_at = (
+        await db.execute(
+            select(func.max(ExtractionJob.completed_at)).where(
+                ExtractionJob.analysis_id == analysis_id,
+                ExtractionJob.file_type == "tz",
+            )
+        )
+    ).scalar_one_or_none()
+    compare_started_at = (
+        await db.execute(
+            select(func.min(ComparisonJob.created_at)).where(
+                ComparisonJob.analysis_id == analysis_id
+            )
+        )
+    ).scalar_one_or_none()
+
+    # Конечная точка отсчёта: завершение, либо «сейчас» если ещё в работе.
+    end_at = completed_at
+    if end_at is None:
+        # Пока на проверке ТЗ и сравнение не начато — таймер на паузе на tz_ready_at.
+        if status == "tz_review" and tz_ready_at is not None and compare_started_at is None:
+            end_at = tz_ready_at
+        else:
+            end_at = datetime.utcnow()
+
+    total = (end_at - created_at).total_seconds()
+
+    # Вычитаем паузу на проверку ТЗ, если обе границы известны и валидны.
+    if tz_ready_at is not None and compare_started_at is not None:
+        pause = (compare_started_at - tz_ready_at).total_seconds()
+        if pause > 0:
+            total -= pause
+
+    return round(total, 1) if total >= 0 else None
+
+
 async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> dict:
     extraction_result_rows = await db.execute(
         select(ExtractionResult).where(ExtractionResult.analysis_id == analysis_id)
@@ -477,11 +535,14 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
         if tz_row.name and tz_row.comment and tz_row.comment.strip():
             tz_comments_by_name.setdefault(tz_row.name, []).append(tz_row.comment.strip())
 
+    processing_seconds = await _compute_processing_seconds(analysis_id, db)
+
     return {
         "analysis_id": str(analysis_id),
         "evidence_version": "v2",
         "documents": documents,
         "available_documents": documents,
+        "processing_seconds": processing_seconds,
         "rows": [
             _build_viewer_row(
                 row, user_edits_by_row, tz_comments_by_name, feedback_by_row
