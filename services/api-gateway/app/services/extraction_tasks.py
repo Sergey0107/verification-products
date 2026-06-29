@@ -146,18 +146,34 @@ def _wrap_flat_products(products: list) -> list:
 
 def _normalize_flat_products_in_place(result_payload: dict) -> bool:
     """Оборачивает плоский список характеристик в изделие. Возвращает True, если
-    нормализация применена. Чинит и result.products, и extraction.products."""
+    нормализация применена. Чинит result.products, extraction.products И
+    extraction.pages[].extracted_data.products — последнее важно, потому что
+    extraction.products собирается ИЗ pages, и если pages остаются плоскими,
+    собранный extraction.products получается из «изделий» с пустыми характеристиками."""
     if not isinstance(result_payload, dict):
         return False
     applied = False
+
+    def _fix_products_holder(holder: dict) -> None:
+        nonlocal applied
+        if isinstance(holder, dict) and isinstance(holder.get("products"), list):
+            wrapped = _wrap_flat_products(holder["products"])
+            if wrapped is not holder["products"] and wrapped != holder["products"]:
+                holder["products"] = wrapped
+                applied = True
+
     for root_key in ("result", "extraction"):
         root = result_payload.get(root_key)
-        if isinstance(root, dict) and isinstance(root.get("products"), list):
-            wrapped = _wrap_flat_products(root["products"])
-            if wrapped is not root["products"] and wrapped != root["products"]:
-                root["products"] = wrapped
-                applied = True
-    # Случай, когда result сам = {products: [...]} уже покрыт выше.
+        if isinstance(root, dict):
+            _fix_products_holder(root)
+
+    # Чиним вложенные pages[].extracted_data до сборки extraction.products.
+    extraction = result_payload.get("extraction")
+    if isinstance(extraction, dict) and isinstance(extraction.get("pages"), list):
+        for page in extraction["pages"]:
+            if isinstance(page, dict) and isinstance(page.get("extracted_data"), dict):
+                _fix_products_holder(page["extracted_data"])
+
     return applied
 
 
@@ -464,12 +480,15 @@ def run_extraction_task(
         )
         _raise_for_status_with_detail(extract_resp, "Extraction service")
         result_payload = extract_resp.json()
-        _normalize_docling_extraction(result_payload)
+        # Порядок важен: сначала чиним плоский формат LLM-ответа во ВСЕХ местах
+        # (result, pages[].extracted_data), и только потом собираем
+        # extraction.products из pages — иначе он соберётся из искажённой структуры.
         if _normalize_flat_products_in_place(result_payload):
             logger.info(
                 "Wrapped flat characteristics list into a product (analysis=%s file_type=%s)",
                 analysis_id, file_type,
             )
+        _normalize_docling_extraction(result_payload)
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)

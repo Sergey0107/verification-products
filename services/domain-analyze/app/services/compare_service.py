@@ -133,12 +133,35 @@ def _collect_products_from_pages(pages: Any) -> list[dict]:
 def _normalize_products(data: dict) -> list[dict]:
     if not isinstance(data, dict):
         return []
-    extraction = data.get("extraction") if "extraction" in data else data
-    if not isinstance(extraction, dict):
-        return []
-    products = extraction.get("products")
-    if not isinstance(products, list):
-        products = _collect_products_from_pages(extraction.get("pages"))
+    # Источник products выбираем по приоритету. result.products — это полный,
+    # необработанный ответ LLM (правильная вложенная структура изделий с
+    # характеристиками). extraction.products собирается отдельно из pages и может
+    # быть искажён (напр. flat-формат LLM разворачивается в N «изделий» с пустыми
+    # characteristics) — поэтому берём его лишь как запасной вариант.
+    candidates: list[dict] = []
+    if isinstance(data.get("result"), dict):
+        candidates.append(data["result"])
+    if isinstance(data.get("extraction"), dict):
+        candidates.append(data["extraction"])
+    candidates.append(data)
+
+    products: Any = None
+    for source in candidates:
+        if not isinstance(source, dict):
+            continue
+        candidate = source.get("products")
+        if not isinstance(candidate, list):
+            candidate = _collect_products_from_pages(source.get("pages"))
+        # Берём первый источник, где есть продукт хотя бы с одной характеристикой —
+        # иначе пустой/искажённый extraction.products «выиграл» бы у полного result.
+        if isinstance(candidate, list) and any(
+            isinstance(p, dict) and (p.get("characteristics") or [])
+            for p in candidate
+        ):
+            products = candidate
+            break
+        if products is None and isinstance(candidate, list):
+            products = candidate
     if not isinstance(products, list):
         return []
     normalized = []
