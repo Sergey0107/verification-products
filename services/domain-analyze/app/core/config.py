@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         else SettingsConfigDict()
     )
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+    OPENROUTER_MODEL: str = "openai/gpt-4.1"
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     PROMPT_REGISTRY_URL: str = "http://prompt-registry:8000"
     KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
