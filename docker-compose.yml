@@ -104,6 +104,10 @@ services:
 
   extraction-service:
     build: ../extraction
+    # init: tini как PID 1 reap-ает зомби-процессы. LibreOffice (конвертация Office→PDF)
+    # форкает фоновые gpg/gpgconf, которые uvicorn не подбирает — без init они копятся
+    # зомби (десятки), засоряя таблицу процессов.
+    init: true
     env_file:
       - ./env/.env
     ports:
