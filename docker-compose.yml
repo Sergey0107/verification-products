@@ -63,7 +63,12 @@ services:
 
   api-gateway-worker:
     build: ./services/api-gateway
-    command: celery -A app.celery_app worker -l info -Q api_gateway
+    # concurrency=2: извлечение паспорта тяжёлое (OCR + LLM, до нескольких минут на
+    # документ) и упирается в CPU. На 4-ядерном сервере параллельный запуск 4 задач
+    # насыщал процессор (load ~10), и каждая задача растягивалась до 15+ минут или
+    # упиралась в таймаут. Два параллельных извлечения — баланс пропускной
+    # способности и стабильности.
+    command: celery -A app.celery_app worker -l info -Q api_gateway --concurrency=2 --prefetch-multiplier=1
     env_file:
       - ./env/.env
     volumes:

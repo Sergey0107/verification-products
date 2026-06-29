@@ -10,6 +10,11 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    # Подтверждаем задачу только ПОСЛЕ выполнения: если воркер упадёт во время
+    # сравнения, задача вернётся в очередь, а не потеряется. compare_documents
+    # идемпотентна (результат уходит callback'ом в gateway).
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
     task_default_queue="domain_analyze",
     task_default_exchange="domain_analyze",
     task_default_routing_key="domain_analyze",
