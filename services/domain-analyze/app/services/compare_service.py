@@ -473,6 +473,35 @@ def _dedupe_source_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unique
 
 
+def _clean_display_quote(
+    quote: str | None, value: Any, characteristic_name: str | None
+) -> str | None:
+    """Формирует короткую читаемую подпись для колонки «Найдено в документации».
+
+    LLM теперь получает таблицы как Markdown, поэтому quote_text характеристики из
+    таблицы — это ЦЕЛАЯ строка вида 'модель | v1 | v2 | ... | vN'. Показывать её
+    пользователю целиком бессмысленно (видно весь ряд таблицы вместо значения).
+    Для Markdown-строк показываем «<характеристика> <значение>», а не сырой ряд."""
+    if quote and "|" in quote and quote.count("|") >= 2:
+        # Табличная Markdown-строка — заменяем на значение характеристики.
+        val = str(value).strip() if value is not None else ""
+        if val and characteristic_name:
+            return f"{characteristic_name}: {val}"
+        if val:
+            return val
+        # Фолбэк: первая непустая ячейка-значение (не код модели).
+        cells = [c.strip() for c in quote.split("|") if c.strip()]
+        cells = [c for c in cells if not re.fullmatch(r"[-:\s]+", c)]
+        if len(cells) >= 2:
+            return cells[1]
+    if not quote:
+        raw = str(value).strip() if value is not None else None
+        if raw and characteristic_name:
+            return f"{characteristic_name} {raw}"
+        return raw
+    return quote
+
+
 def _build_evidence_payload(
     *,
     document_type: str,
@@ -527,11 +556,9 @@ def _build_evidence_payload(
         None,
     )
     page_anchor = next((span for span in source_spans if span.get("page_number")), None)
-    raw_fallback = quote or (str(value) if value is not None else None)
-    if not quote and raw_fallback and characteristic_name:
-        fallback_quote = f"{characteristic_name} {raw_fallback}"
-    else:
-        fallback_quote = raw_fallback
+    # display_quote — короткая подпись для UI. Markdown-строки таблиц превращаем в
+    # «<характеристика>: <значение>», а не показываем весь ряд таблицы.
+    fallback_quote = _clean_display_quote(quote, value, characteristic_name)
     locator_strategy = (
         exact_span.get("locator_strategy")
         if exact_span
