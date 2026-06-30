@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -289,6 +290,102 @@ def _model_aliases(product_model: str) -> list[str]:
     return [a for a in aliases if a]
 
 
+def _parse_marking_params(product_model: str) -> dict[str, float] | None:
+    """Парсит параметры, закодированные в коде модели насоса вида
+    «ХМ <подача>/<напор><материал>-<мощность,кВт>».
+    Пример: 'ХМ 1,1/2,5П-0,045-G3/4' → {'подача': 1.1, 'напор': 2.5, 'мощность_квт': 0.045}.
+    Возвращает None, если код не распознан."""
+    if not isinstance(product_model, str):
+        return None
+    norm = product_model.replace(",", ".")
+    # <подача>/<напор><буквы-материал>-<мощность>
+    m = re.search(
+        r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*[A-Za-zА-Яа-я]*-(\d+(?:\.\d+)?)",
+        norm,
+    )
+    if not m:
+        return None
+    try:
+        return {
+            "подача": float(m.group(1)),
+            "напор": float(m.group(2)),
+            "мощность_квт": float(m.group(3)),
+        }
+    except ValueError:
+        return None
+
+
+def _first_number(value: Any) -> float | None:
+    """Первое число из строки значения характеристики ('45,0 Вт' → 45.0)."""
+    if value is None:
+        return None
+    m = re.search(r"-?\d+(?:[.,]\d+)?", str(value))
+    if not m:
+        return None
+    try:
+        return float(m.group(0).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _validate_characteristics_against_marking(result_payload: dict) -> int:
+    """Сверяет извлечённые подачу/напор/мощность с параметрами, закодированными в
+    коде модели. При значимом расхождении помечает характеристику флагом
+    'low_confidence' (НЕ перезаписывая значение — код модели может округлять, а
+    ячейка таблицы достовернее). Возвращает число помеченных характеристик.
+
+    Защита от грубых ошибок сопоставления модель↔значение (сдвиг колонок таблицы)."""
+    result = result_payload.get("result") if isinstance(result_payload, dict) else None
+    if not isinstance(result, dict):
+        result = result_payload
+    products = result.get("products") if isinstance(result, dict) else None
+    if not isinstance(products, list):
+        return 0
+
+    # Названия характеристик → ключ параметра кода + множитель к единице кода.
+    # Мощность в коде — в кВт; в паспортах часто в Вт (×1000).
+    flagged = 0
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        marking = _parse_marking_params(str(product.get("product_model") or ""))
+        if not marking:
+            continue
+        chars = product.get("characteristics")
+        if not isinstance(chars, list):
+            continue
+        for char in chars:
+            if not isinstance(char, dict):
+                continue
+            name = str(char.get("name") or "").lower()
+            actual = _first_number(char.get("value"))
+            if actual is None:
+                continue
+            expected = None
+            tolerance = 0.0
+            if "подач" in name:
+                expected, tolerance = marking["подача"], 0.15
+            elif "напор" in name:
+                expected, tolerance = marking["напор"], 0.15
+            elif "мощност" in name:
+                # код в кВт; значение может быть в кВт или Вт — сверяем оба.
+                kw, w = marking["мощность_квт"], marking["мощность_квт"] * 1000
+                if min(abs(actual - kw), abs(actual - w)) <= max(kw, w) * 0.2 + 0.01:
+                    continue
+                expected, tolerance = kw, 0.2
+            if expected is None:
+                continue
+            allowed = abs(expected) * tolerance + 0.01
+            if abs(actual - expected) > allowed:
+                char["low_confidence"] = True
+                char["marking_mismatch"] = (
+                    f"значение {actual} расходится с кодом модели "
+                    f"(ожидалось ~{expected})"
+                )
+                flagged += 1
+    return flagged
+
+
 def _build_target_characteristics_appendix(
     file_type: str,
     target_characteristics: list[dict] | None,
@@ -489,6 +586,13 @@ def run_extraction_task(
                 analysis_id, file_type,
             )
         _normalize_docling_extraction(result_payload)
+        flagged = _validate_characteristics_against_marking(result_payload)
+        if flagged:
+            logger.info(
+                "Marking validation: flagged %d characteristic(s) as low_confidence "
+                "(value contradicts model code; analysis=%s file_type=%s)",
+                flagged, analysis_id, file_type,
+            )
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)
