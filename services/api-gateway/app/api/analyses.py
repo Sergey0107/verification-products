@@ -410,12 +410,16 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
 async def _compute_processing_seconds(
     analysis_id: UUID, db: AsyncSession
 ) -> float | None:
-    """Активное время обработки в секундах: от загрузки документов до статуса
-    «готово», за вычетом паузы на ручную проверку ТЗ.
+    """Время обработки в секундах: ВСЁ время от загрузки документов до статуса
+    «готово», на паузе ТОЛЬКО когда система ждёт действия пользователя.
 
-    Пауза = период между готовностью ТЗ к проверке (extraction_job(tz).completed_at)
-    и запуском сравнения после подтверждения пользователем (comparison_job.created_at).
-    Пока документ в статусе tz_review (юзер ещё не подтвердил) — отсчёт на паузе."""
+    Единственная пауза-ожидание в пайплайне — этап проверки ТЗ (статус tz_review):
+    система извлекла характеристики ТЗ и ждёт, пока пользователь их подтвердит.
+    Подтверждение запускает извлечение паспорта (создаётся extraction_job паспорта),
+    поэтому конец паузы = старт извлечения паспорта, а НЕ создание comparison_job
+    (между ними идёт извлечение паспорта — это активная работа, её вычитать нельзя).
+
+    Активное время = (конец − старт) − (старт_извлечения_паспорта − готовность_ТЗ)."""
     analysis = (
         await db.execute(
             select(Analysis.created_at, Analysis.completed_at, Analysis.status).where(
@@ -429,6 +433,7 @@ async def _compute_processing_seconds(
     if created_at is None:
         return None
 
+    # Готовность ТЗ → начало паузы (система перешла в tz_review и ждёт пользователя).
     tz_ready_at = (
         await db.execute(
             select(func.max(ExtractionJob.completed_at)).where(
@@ -437,28 +442,32 @@ async def _compute_processing_seconds(
             )
         )
     ).scalar_one_or_none()
-    compare_started_at = (
+    # Старт извлечения паспорта → конец паузы (пользователь подтвердил ТЗ).
+    passport_started_at = (
         await db.execute(
-            select(func.min(ComparisonJob.created_at)).where(
-                ComparisonJob.analysis_id == analysis_id
+            select(func.min(ExtractionJob.created_at)).where(
+                ExtractionJob.analysis_id == analysis_id,
+                ExtractionJob.file_type == "passport",
             )
         )
     ).scalar_one_or_none()
 
-    # Конечная точка отсчёта: завершение, либо «сейчас» если ещё в работе.
+    # Конечная точка отсчёта: завершение, либо граница паузы / «сейчас» если в работе.
     end_at = completed_at
     if end_at is None:
-        # Пока на проверке ТЗ и сравнение не начато — таймер на паузе на tz_ready_at.
-        if status == "tz_review" and tz_ready_at is not None and compare_started_at is None:
+        # Пока на проверке ТЗ (юзер не подтвердил) — таймер замораживается на
+        # готовности ТЗ, чтобы ожидание пользователя не накручивало время.
+        if status == "tz_review" and tz_ready_at is not None and passport_started_at is None:
             end_at = tz_ready_at
         else:
             end_at = datetime.utcnow()
 
     total = (end_at - created_at).total_seconds()
 
-    # Вычитаем паузу на проверку ТЗ, если обе границы известны и валидны.
-    if tz_ready_at is not None and compare_started_at is not None:
-        pause = (compare_started_at - tz_ready_at).total_seconds()
+    # Вычитаем ТОЛЬКО ожидание пользователя на проверке ТЗ (готовность ТЗ → старт
+    # извлечения паспорта). Само извлечение паспорта в паузу НЕ входит.
+    if tz_ready_at is not None and passport_started_at is not None:
+        pause = (passport_started_at - tz_ready_at).total_seconds()
         if pause > 0:
             total -= pause
 
