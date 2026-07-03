@@ -1,9 +1,11 @@
 from app.core.config import settings
 
-SUPPORTED_EXTRACTION_BACKENDS = ("openrouter", "llamaparse")
+SUPPORTED_EXTRACTION_BACKENDS = ("openrouter", "llamaparse", "mineru", "pdfplumber")
 EXTRACTION_BACKEND_LABELS = {
     "openrouter": "OpenRouter",
     "llamaparse": "LlamaParse + OpenRouter",
+    "mineru": "MinerU + OpenRouter",
+    "pdfplumber": "pdfplumber (точная геометрия) + OpenRouter",
 }
 
 

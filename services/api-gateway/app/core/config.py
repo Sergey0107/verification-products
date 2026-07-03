@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     COOKIE_DOMAIN: str | None = None
     PROMPT_REGISTRY_URL: str = "http://prompt-registry:8000"
     EXTRACTION_SERVICE_URL: str = "http://extraction-service:8000"
-    EXTRACTION_BACKEND: str = "openrouter"
+    EXTRACTION_BACKEND: str = "mineru"
     KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
     KNOWLEDGE_BASE_TIMEOUT_SECONDS: int = 5
     DOMAIN_ANALYZE_URL: str = "http://domain-analyze:8000"

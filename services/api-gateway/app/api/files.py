@@ -24,7 +24,9 @@ router = APIRouter()
 
 @router.post("/files/upload")
 async def upload_files(
-    extraction_backend: str = Form("openrouter"),
+    # Пусто/не задано → берём дефолт из settings.EXTRACTION_BACKEND (env), а не
+    # хардкод "openrouter". Так переключение бэкенда через env реально работает.
+    extraction_backend: str | None = Form(None),
     task_id: str = Form(""),
     product_model: str = Form(""),
     tz_file: UploadFile = File(...),
