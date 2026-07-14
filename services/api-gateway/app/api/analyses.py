@@ -18,7 +18,7 @@ from app.db.models.extraction_results import ExtractionResult
 from app.db.models.comparison_jobs import ComparisonJob
 from app.db.models.extraction_jobs import ExtractionJob
 from app.db.models.files import File as FileModel
-from app.db.models.analysis import ComparisonRow, UserEdit
+from app.db.models.analysis import ComparisonRow, HiddenCharacteristic, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
 from app.services.extraction_backends import extraction_backend_label
@@ -505,7 +505,19 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
     rows_result = await db.execute(
         select(ComparisonRow).where(ComparisonRow.analysis_id == analysis_id)
     )
-    rows = rows_result.scalars().all()
+    all_rows = rows_result.scalars().all()
+
+    # Характеристики, удалённые пользователем из таблицы сравнения (см.
+    # DELETE /comparison-rows/{row_id}) — переживают повторный прогон
+    # сравнения, т.к. ComparisonRow каждый раз пересоздаётся заново, а этот
+    # список хранится отдельно и фильтруется по стабильному имени.
+    hidden_result = await db.execute(
+        select(HiddenCharacteristic.characteristic_name).where(
+            HiddenCharacteristic.analysis_id == analysis_id
+        )
+    )
+    hidden_names = {name for (name,) in hidden_result.all()}
+    rows = [row for row in all_rows if row.characteristic not in hidden_names]
 
     # Загружаем UserEdit (комментарии и отметки Да/Нет из модалки "Проверка
     # совпадения") вместе с автором (login) и группируем по row_id.

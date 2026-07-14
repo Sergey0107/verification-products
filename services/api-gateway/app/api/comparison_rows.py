@@ -3,11 +3,18 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.api.deps import parse_uuid
-from app.db.models.analysis import Analysis, ComparisonRow, ManualCharacteristic, UserEdit
+from app.db.models.analysis import (
+    Analysis,
+    ComparisonRow,
+    HiddenCharacteristic,
+    ManualCharacteristic,
+    UserEdit,
+)
 from app.db.models.users import User
 from app.db.session import get_db
 from app.services.manual_evidence import build_manual_evidence
@@ -192,3 +199,38 @@ async def create_manual_passport_match(
         "passport_value": value,
         "passport_evidence": evidence,
     }
+
+
+@router.delete("/comparison-rows/{row_id}")
+async def delete_comparison_row(
+    row_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Удаляет характеристику из таблицы сравнения. ComparisonRow целиком
+    пересоздаётся при каждом повторном прогоне сравнения (compare_callback),
+    поэтому удаление строки саму по себе не сохранилось бы — вместо этого
+    запоминаем имя характеристики в hidden_characteristic и фильтруем по нему
+    свежие ComparisonRow при каждой выдаче viewer-context. Идемпотентно:
+    повторное удаление той же характеристики — no-op."""
+    row_uuid = parse_uuid(row_id)
+    row_result = await db.execute(
+        select(ComparisonRow.analysis_id, ComparisonRow.characteristic)
+        .join(Analysis, Analysis.id == ComparisonRow.analysis_id)
+        .where(ComparisonRow.id == row_uuid)
+        .where(Analysis.user_id == current_user.id)
+    )
+    row = row_result.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Row not found")
+    analysis_id, characteristic_name = row
+
+    stmt = insert(HiddenCharacteristic).values(
+        analysis_id=analysis_id,
+        characteristic_name=characteristic_name,
+    )
+    stmt = stmt.on_conflict_do_nothing(constraint="uq_hidden_characteristic")
+    await db.execute(stmt)
+    await db.commit()
+
+    return {"ok": True}

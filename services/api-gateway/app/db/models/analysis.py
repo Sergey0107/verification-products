@@ -127,10 +127,36 @@ class ManualCharacteristic(Base):
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+class HiddenCharacteristic(Base):
+    """Характеристика, которую пользователь удалил из таблицы сравнения.
+    ComparisonRow целиком пересоздаётся при каждом повторном прогоне сравнения
+    (см. compare_callback в compare.py), поэтому "удаление" не может быть
+    флагом на самой строке — вместо этого храним стабильный список скрытых
+    имён характеристик отдельно и применяем его как фильтр поверх свежих
+    ComparisonRow при каждой выдаче viewer-context (тот же паттерн, что и
+    TzCharacteristicReview для комментариев ТЗ-ревью)."""
+
+    __tablename__ = "hidden_characteristic"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", "characteristic_name", name="uq_hidden_characteristic"),
+        {"schema": "analysis"},
+    )
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    characteristic_name = Column(String, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 __all__ = [
     "Analysis",
     "ComparisonRow",
     "UserEdit",
     "TzCharacteristicReview",
     "ManualCharacteristic",
+    "HiddenCharacteristic",
 ]
