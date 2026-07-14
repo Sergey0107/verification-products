@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import re
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.api.deps import parse_uuid
+from app.core.config import settings
 from app.db.models.analysis import Analysis, TzCharacteristicReview
 from app.db.models.extraction_results import ExtractionResult
 from app.db.models.comparison_jobs import ComparisonJob
@@ -1045,6 +1047,90 @@ async def get_extraction(
     if row is None:
         raise HTTPException(status_code=404, detail="Not found")
     return JSONResponse(content=row.payload)
+
+
+@router.get("/analyses/{analysis_id}/ocr-index/{file_type}")
+async def get_ocr_index(
+    analysis_id: str,
+    file_type: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Постраничный OCR word-индекс (текст + координаты) для документов без
+    текстового слоя (сканов) — используется фронтендом для поиска/автораспознавания
+    там, где обычный текстовый слой PDF отсутствует.
+
+    Ленивый и независимый от основного пайплайна /extract: вызывается только по
+    требованию фронтенда, кэшируется в той же таблице ExtractionResult под
+    отдельным file_type (f"{file_type}_ocr_index"), чтобы не пересчитывать OCR
+    при повторных открытиях."""
+    if file_type not in {"tz", "passport"}:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    analysis_uuid = parse_uuid(analysis_id)
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
+
+    cache_file_type = f"{file_type}_ocr_index"
+    cached = await db.execute(
+        select(ExtractionResult)
+        .where(ExtractionResult.analysis_id == analysis_uuid)
+        .where(ExtractionResult.file_type == cache_file_type)
+    )
+    cached_row = cached.scalar_one_or_none()
+    if cached_row is not None:
+        return JSONResponse(content=cached_row.payload)
+
+    file_result = await db.execute(
+        select(FileModel)
+        .where(FileModel.analysis_id == analysis_uuid)
+        .where(FileModel.file_type == file_type)
+    )
+    file_record = file_result.scalar_one_or_none()
+    if file_record is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as presign_client:
+            presign_resp = await presign_client.get(
+                f"{settings.FILE_SERVICE_URL}/files/presign",
+                params={"key": file_record.storage_path, "expires_in": 3600},
+            )
+            presign_resp.raise_for_status()
+            presigned_url = presign_resp.json().get("url", "")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to presign file: {exc}") from exc
+    if not presigned_url:
+        raise HTTPException(status_code=502, detail="Failed to presign file")
+
+    try:
+        async with httpx.AsyncClient(timeout=300) as ocr_client:
+            ocr_resp = await ocr_client.get(
+                f"{settings.EXTRACTION_SERVICE_URL}/ocr-index",
+                params={"url": presigned_url},
+            )
+        if ocr_resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OCR index failed: {ocr_resp.status_code} {ocr_resp.text[:300]}",
+            )
+        payload = ocr_resp.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to build OCR index: {exc}") from exc
+
+    upsert_stmt = insert(ExtractionResult).values(
+        analysis_id=analysis_uuid,
+        file_type=cache_file_type,
+        payload=payload,
+    )
+    upsert_stmt = upsert_stmt.on_conflict_do_update(
+        constraint="uq_extraction_result",
+        set_={"payload": payload, "updated_at": func.now()},
+    )
+    await db.execute(upsert_stmt)
+    await db.commit()
+
+    return JSONResponse(content=payload)
 
 
 @router.get("/analyses/{analysis_id}/comparison")
