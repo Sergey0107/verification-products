@@ -7,6 +7,7 @@ from app.api.compare import router as compare_router
 from app.api.comparison_rows import router as comparison_rows_router
 from app.api.files import router as files_router
 from app.api.health import router as health_router
+from app.api.manual_characteristics import router as manual_characteristics_router
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 
@@ -15,6 +16,7 @@ app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(files_router, tags=["files"])
 app.include_router(analyses_router, prefix="/api", tags=["analyses"])
 app.include_router(comparison_rows_router, prefix="/api", tags=["comparison-rows"])
+app.include_router(manual_characteristics_router, prefix="/api", tags=["manual-characteristics"])
 app.include_router(compare_router, tags=["compare"])
 app.include_router(health_router, tags=["health"])
 

@@ -667,13 +667,80 @@ def _merge_tz_review_items(
     rows_by_id: dict[str, TzCharacteristicReview],
 ) -> list[dict]:
     items = []
+    seen_ids: set[str] = set()
     for item in characteristics:
         row = rows_by_id.get(item["characteristic_id"])
         merged = dict(item)
         merged["approved"] = bool(row.approved) if row else True
         merged["comment"] = row.comment if row and row.comment else None
         items.append(merged)
+        seen_ids.add(item["characteristic_id"])
+    # Характеристики, добавленные вручную (см. manual_characteristics.py), никогда
+    # не приходят из LLM-извлечения — они существуют ТОЛЬКО как строки
+    # TzCharacteristicReview с id вида "manual-<uuid>". Добавляем их сюда, чтобы
+    # они отображались в общем списке ревью наравне с извлечёнными.
+    for characteristic_id, row in rows_by_id.items():
+        if characteristic_id in seen_ids or not characteristic_id.startswith("manual-"):
+            continue
+        items.append(
+            {
+                "characteristic_id": characteristic_id,
+                "product_name": row.product_name,
+                "name": row.name,
+                "label": f"{row.product_name} — {row.name}",
+                "value": row.value or "",
+                "references": row.references or [],
+                "evidence": row.evidence,
+                "approved": bool(row.approved),
+                "comment": row.comment or None,
+            }
+        )
     return items
+
+
+async def _upsert_tz_characteristic_review(
+    analysis_id: UUID,
+    *,
+    characteristic_id: str,
+    product_name: str,
+    name: str,
+    value: str | None,
+    references: list | None,
+    evidence: dict | None,
+    approved: bool,
+    comment: str | None,
+    db: AsyncSession,
+) -> None:
+    now = datetime.utcnow()
+    stmt = (
+        insert(TzCharacteristicReview)
+        .values(
+            analysis_id=analysis_id,
+            characteristic_id=characteristic_id,
+            product_name=product_name,
+            name=name,
+            value=value,
+            references=references,
+            evidence=evidence,
+            approved=approved,
+            comment=comment,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=["analysis_id", "characteristic_id"],
+            set_={
+                "product_name": product_name,
+                "name": name,
+                "value": value,
+                "references": references,
+                "evidence": evidence,
+                "approved": approved,
+                "comment": comment,
+                "updated_at": now,
+            },
+        )
+    )
+    await db.execute(stmt)
 
 
 async def _save_tz_review_decisions(
@@ -684,12 +751,19 @@ async def _save_tz_review_decisions(
     comments: dict[str, str | None] | None = None,
 ) -> None:
     characteristic_ids = {item["characteristic_id"] for item in characteristics}
-    unknown_ids = set(decisions) - characteristic_ids
+    rows_by_id = await _tz_review_rows_map(analysis_id, db)
+    # Ручные характеристики (id "manual-<uuid>") не приходят из LLM-payload —
+    # они уже существуют как строки TzCharacteristicReview (созданные через
+    # POST /manual-characteristics). Разрешаем decisions/comments и по ним.
+    known_manual_ids = {
+        characteristic_id
+        for characteristic_id in rows_by_id
+        if characteristic_id.startswith("manual-")
+    }
+    unknown_ids = set(decisions) - characteristic_ids - known_manual_ids
     if unknown_ids:
         raise HTTPException(status_code=400, detail="Unknown TZ characteristic id")
 
-    rows_by_id = await _tz_review_rows_map(analysis_id, db)
-    now = datetime.utcnow()
     for item in characteristics:
         characteristic_id = item["characteristic_id"]
         existing = rows_by_id.get(characteristic_id)
@@ -700,35 +774,39 @@ async def _save_tz_review_decisions(
         comment = (comments or {}).get(characteristic_id)
         if comment is None and existing and existing.comment:
             comment = existing.comment
-        stmt = (
-            insert(TzCharacteristicReview)
-            .values(
-                analysis_id=analysis_id,
-                characteristic_id=characteristic_id,
-                product_name=item["product_name"],
-                name=item["name"],
-                value=item.get("value") or None,
-                references=item.get("references"),
-                evidence=item.get("evidence"),
-                approved=approved,
-                comment=comment,
-                updated_at=now,
-            )
-            .on_conflict_do_update(
-                index_elements=["analysis_id", "characteristic_id"],
-                set_={
-                    "product_name": item["product_name"],
-                    "name": item["name"],
-                    "value": item.get("value") or None,
-                    "references": item.get("references"),
-                    "evidence": item.get("evidence"),
-                    "approved": approved,
-                    "comment": comment,
-                    "updated_at": now,
-                },
-            )
+        await _upsert_tz_characteristic_review(
+            analysis_id,
+            characteristic_id=characteristic_id,
+            product_name=item["product_name"],
+            name=item["name"],
+            value=item.get("value") or None,
+            references=item.get("references"),
+            evidence=item.get("evidence"),
+            approved=approved,
+            comment=comment,
+            db=db,
         )
-        await db.execute(stmt)
+
+    for characteristic_id in known_manual_ids:
+        if characteristic_id not in decisions and characteristic_id not in (comments or {}):
+            continue
+        existing = rows_by_id[characteristic_id]
+        approved = decisions.get(characteristic_id, bool(existing.approved))
+        comment = (comments or {}).get(characteristic_id)
+        if comment is None and existing.comment:
+            comment = existing.comment
+        await _upsert_tz_characteristic_review(
+            analysis_id,
+            characteristic_id=characteristic_id,
+            product_name=existing.product_name,
+            name=existing.name,
+            value=existing.value,
+            references=existing.references,
+            evidence=existing.evidence,
+            approved=approved,
+            comment=comment,
+            db=db,
+        )
 
 
 def _review_target_characteristics(

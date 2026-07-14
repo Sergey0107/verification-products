@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func, text
 from app.db.base import Base
@@ -95,4 +95,42 @@ class TzCharacteristicReview(Base):
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
-__all__ = ["Analysis", "ComparisonRow", "UserEdit", "TzCharacteristicReview"]
+class ManualCharacteristic(Base):
+    """Характеристика, добавленная пользователем вручную путём выделения области
+    в документе (ТЗ или паспорт), а не извлечённая LLM. Хранится отдельно от
+    TzCharacteristicReview/ComparisonRow — те таблицы имеют другое назначение
+    (решение по ревью / денормализованный результат сравнения, стираемый при
+    каждом перезапуске сравнения) и не должны знать о происхождении записи."""
+
+    __tablename__ = "manual_characteristic"
+    __table_args__ = {"schema": "analysis"}
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    document_type = Column(String, nullable=False)  # 'tz' | 'passport'
+    # NULL для новой характеристики ТЗ (кейс А). Заполнено ID строки
+    # TzCharacteristicReview/ComparisonRow, к которой привязана ручная аннотация
+    # в паспорте (кейс Б).
+    linked_characteristic_id = Column(String, nullable=True)
+    product_name = Column(String, nullable=False, server_default=text("'Ручной ввод'"))
+    name = Column(String, nullable=False)
+    value = Column(Text, nullable=True)
+    page = Column(Integer, nullable=False)
+    bbox = Column(JSONB, nullable=False)
+    bbox_units = Column(String, nullable=False, server_default=text("'normalized'"))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+__all__ = [
+    "Analysis",
+    "ComparisonRow",
+    "UserEdit",
+    "TzCharacteristicReview",
+    "ManualCharacteristic",
+]

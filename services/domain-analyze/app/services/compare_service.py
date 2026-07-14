@@ -755,6 +755,26 @@ def _values_clearly_match(tz_value: Any, passport_value: Any) -> bool:
     return norm_tz == norm_passport
 
 
+_MISSING_VALUE_NOTE_RE = re.compile(
+    r"(отсутствует|не найден|не указан|нет данных|нет в паспорте|нет в тз)",
+    re.IGNORECASE,
+)
+
+
+def _note_contradicts_value(note: Any, passport_value: Any, tz_value: Any) -> bool:
+    """LLM иногда пишет в note «характеристика отсутствует в паспорте/ТЗ», хотя сама же
+    строка сравнения содержит непустое passport_value/tz_value (извлечённое из документа
+    независимо от LLM). Такой note противоречит фактическим данным и вводит пользователя
+    в заблуждение — характеристика на самом деле найдена, просто LLM ошиблась в пояснении."""
+    if not isinstance(note, str) or not note.strip():
+        return False
+    if not _MISSING_VALUE_NOTE_RE.search(note):
+        return False
+    passport_present = bool(str(passport_value).strip()) if passport_value is not None else False
+    tz_present = bool(str(tz_value).strip()) if tz_value is not None else False
+    return passport_present and tz_present
+
+
 def _chunk(items: list[dict], size: int) -> list[list[dict]]:
     if size <= 0:
         return [items]
@@ -953,6 +973,14 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
             # независимо от того, что вернула LLM
             if _values_clearly_match(item.get("tz_value"), item.get("passport_value")):
                 comparisons[idx]["is_match"] = True
+            # LLM иногда пишет note вида «характеристика отсутствует в паспорте»,
+            # хотя passport_value/tz_value в этой же строке непустые (взяты из
+            # извлечения документа, а не от LLM) — такой note противоречит данным
+            # и вводит пользователя в заблуждение, поэтому убираем его.
+            if _note_contradicts_value(
+                comparisons[idx].get("note"), item.get("passport_value"), item.get("tz_value")
+            ):
+                comparisons[idx]["note"] = None
             comparisons[idx] = _attach_evidence_to_comparison(item, comparisons[idx])
         all_comparisons.extend(comparisons)
         if debug_chunk is None:
