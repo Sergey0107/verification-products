@@ -212,8 +212,14 @@ def _ordered_products(tz_products: list[dict], passport_products: list[dict]) ->
     return ordered
 
 
-def _build_char_map(products: list[dict]) -> dict[str, dict[str, dict]]:
-    result: dict[str, dict[str, dict]] = {}
+def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
+    """Характеристика -> СПИСОК всех встреченных записей {value, references}, а не
+    одна (последняя). Документ может упоминать одну характеристику несколько раз
+    с разными (в т.ч. противоречивыми) значениями — например разные рабочие точки
+    или опечатка в другой таблице; раньше более раннее упоминание молча
+    перезаписывалось. Первый элемент списка остаётся "основным" для мест кода,
+    которые пока умеют работать только с одним значением (LLM comparison prompt)."""
+    result: dict[str, dict[str, list[dict]]] = {}
     for product in products:
         product_name = product.get("product_name") or "Неизвестное изделие"
         result.setdefault(product_name, {})
@@ -221,10 +227,12 @@ def _build_char_map(products: list[dict]) -> dict[str, dict[str, dict]]:
             name = item.get("name")
             if not name:
                 continue
-            result[product_name][name] = {
-                "value": item.get("value"),
-                "references": item.get("references", []),
-            }
+            result[product_name].setdefault(name, []).append(
+                {
+                    "value": item.get("value"),
+                    "references": item.get("references", []),
+                }
+            )
     return result
 
 
@@ -602,6 +610,24 @@ def _build_evidence_payload(
     }
 
 
+def _build_candidates_map(chars: list[dict]) -> dict[str, list[dict]]:
+    """Группирует характеристики по имени в СПИСОК всех встреченных записей
+    (не одну последнюю) — см. docstring _build_char_map."""
+    result: dict[str, list[dict]] = {}
+    for c in chars:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name")
+        if not name:
+            continue
+        result.setdefault(name, []).append(c)
+    return result
+
+
+def _primary_entry(candidates: list[dict]) -> dict:
+    return candidates[0] if candidates else {}
+
+
 def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict]:
     """Сравнивает ОДНО изделие ТЗ с ОДНИМ изделием паспорта, объединяя
     характеристики по имени. Используется, когда с каждой стороны ровно одно
@@ -614,14 +640,13 @@ def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict
     )
     tz_chars = tz_product.get("characteristics", []) or []
     passport_chars = passport_product.get("characteristics", []) or []
-    tz_map = {c.get("name"): c for c in tz_chars if isinstance(c, dict) and c.get("name")}
-    passport_map = {
-        c.get("name"): c for c in passport_chars if isinstance(c, dict) and c.get("name")
-    }
+    tz_map = _build_candidates_map(tz_chars)
+    passport_map = _build_candidates_map(passport_chars)
     items: list[dict] = []
     for char_name in _ordered_characteristics(tz_chars, passport_chars):
-        tz_entry = tz_map.get(char_name, {})
-        passport_entry = passport_map.get(char_name, {})
+        tz_entry = _primary_entry(tz_map.get(char_name, []))
+        passport_candidates = passport_map.get(char_name, [])
+        passport_entry = _primary_entry(passport_candidates)
         items.append(
             {
                 "product_name": product_name,
@@ -630,6 +655,7 @@ def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict
                 "passport_value": passport_entry.get("value"),
                 "tz_references": tz_entry.get("references", []),
                 "passport_references": passport_entry.get("references", []),
+                "passport_value_candidates": passport_candidates,
             }
         )
     return items
@@ -678,8 +704,9 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                 tz_chars_list, passport_chars_list
             )
             for char_name in ordered_char_names:
-                tz_entry = tz_chars_map.get(char_name, {})
-                passport_entry = passport_chars_map.get(char_name, {})
+                tz_entry = _primary_entry(tz_chars_map.get(char_name, []))
+                passport_candidates = passport_chars_map.get(char_name, [])
+                passport_entry = _primary_entry(passport_candidates)
                 items.append(
                     {
                         "product_name": product_name,
@@ -688,6 +715,7 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                         "passport_value": passport_entry.get("value"),
                         "tz_references": tz_entry.get("references", []),
                         "passport_references": passport_entry.get("references", []),
+                        "passport_value_candidates": passport_candidates,
                     }
                 )
         return items
@@ -703,8 +731,9 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
         )
 
         for char_name in ordered_char_names:
-            tz_entry = tz_chars_map.get(char_name, {})
-            passport_entry = passport_chars_map.get(char_name, {})
+            tz_entry = _primary_entry(tz_chars_map.get(char_name, []))
+            passport_candidates = passport_chars_map.get(char_name, [])
+            passport_entry = _primary_entry(passport_candidates)
             items.append(
                 {
                     "product_name": product_name,
@@ -713,6 +742,7 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                     "passport_value": passport_entry.get("value"),
                     "tz_references": tz_entry.get("references", []),
                     "passport_references": passport_entry.get("references", []),
+                    "passport_value_candidates": passport_candidates,
                 }
             )
     return items
@@ -736,6 +766,30 @@ def _attach_evidence_to_comparison(item: dict[str, Any], comparison: dict[str, A
         value=item.get("passport_value"),
         characteristic_name=char_name,
     )
+    # Документ может упоминать характеристику несколько раз с разными (в т.ч.
+    # противоречивыми) значениями — passport_value/passport_evidence выше несут
+    # только ПЕРВОЕ упоминание (для обратной совместимости с местами кода,
+    # которые понимают одно значение). Здесь строим evidence на КАЖДОГО
+    # кандидата, чтобы фронтенд мог показать и подсветить все варианты.
+    passport_candidates = item.get("passport_value_candidates") or []
+    candidates_payload: list[dict[str, Any]] = []
+    for candidate in passport_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_value = candidate.get("value")
+        candidates_payload.append(
+            {
+                "value": candidate_value,
+                "evidence": _build_evidence_payload(
+                    document_type="passport",
+                    references=candidate.get("references", []),
+                    quote=None,
+                    value=candidate_value,
+                    characteristic_name=char_name,
+                ),
+            }
+        )
+    comparison["passport_value_candidates"] = candidates_payload
     return comparison
 
 

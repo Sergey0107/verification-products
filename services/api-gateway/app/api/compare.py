@@ -65,6 +65,7 @@ async def compare_callback(payload: dict, db: AsyncSession = Depends(get_db)):
                 passport_quote=item.get("passport_quote"),
                 tz_evidence=item.get("tz_evidence"),
                 passport_evidence=item.get("passport_evidence"),
+                passport_value_candidates=item.get("passport_value_candidates"),
                 llm_result=item.get("is_match"),
                 user_result=None,
                 note=item.get("note"),

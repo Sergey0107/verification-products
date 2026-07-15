@@ -40,6 +40,13 @@ class ComparisonRow(Base):
     passport_quote = Column(Text)
     tz_evidence = Column(JSONB)
     passport_evidence = Column(JSONB)
+    # Все значения характеристики, встреченные в паспорте (документ может
+    # упоминать одну характеристику несколько раз с разными, в т.ч.
+    # противоречивыми значениями — разные рабочие точки, опечатка в другой
+    # таблице и т.п.). passport_value/passport_evidence выше — первое из этого
+    # списка (для обратной совместимости с местами кода, ожидающими одно
+    # значение). Формат: [{"value": str|null, "evidence": {...}}].
+    passport_value_candidates = Column(JSONB, nullable=True)
     llm_result = Column(Boolean)
     user_result = Column(Boolean, nullable=True)
     note = Column(String)

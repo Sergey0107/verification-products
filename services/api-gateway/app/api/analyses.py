@@ -599,6 +599,7 @@ def _build_viewer_row(
         or _fallback_evidence("tz", row.tz_quote, row.tz_value),
         "passport_evidence": row.passport_evidence
         or _fallback_evidence("passport", row.passport_quote, row.passport_value),
+        "passport_value_candidates": row.passport_value_candidates or [],
         "user_comments": _build_user_comments(
             row_id, row.characteristic, user_edits_by_row, tz_comments_by_name
         ),
