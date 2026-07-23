@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -548,25 +549,58 @@ def run_extraction_task(
     product_model: str | None = None,
 ) -> dict:
     file_type = (file_type or "").lower()
+    log_extra = {"analysis_id": analysis_id, "file_id": file_id, "file_type": file_type}
+    started_at = time.monotonic()
+    logger.info(
+        "run_extraction_task started backend=%s target_characteristics=%d product_model=%s",
+        extraction_backend or settings.EXTRACTION_BACKEND,
+        len(target_characteristics or []), product_model,
+        extra={**log_extra, "step": "run_extraction_task_start"},
+    )
     if not storage_path:
         raise ValueError(f"Missing storage_path for file {file_id}")
 
     # Всегда генерируем свежий presigned URL через file-service, чтобы избежать
     # истечения срока действия URL из БД (TTL 1 час)
     file_url = _refresh_presigned_url(storage_path)
+    file_url_source = "presigned"
     if not file_url:
         # Fallback: использовать сохранённый URL или прямой S3 URL
         if storage_url:
             file_url = storage_url
+            file_url_source = "storage_url"
         elif settings.BUCKET_NAME:
             file_url = build_s3_url(storage_path)
+            file_url_source = "s3_build"
         else:
             raise ValueError(f"Cannot build file URL for {file_id}: no presign, no storage_url, no BUCKET_NAME")
+    logger.info(
+        "run_extraction_task: file_url resolved via %s", file_url_source,
+        extra={**log_extra, "step": "file_url_resolution"},
+    )
 
     with httpx.Client(timeout=settings.EXTRACTION_TIMEOUT_SECONDS) as client:
+        prompt_started_at = time.monotonic()
         prompt_resp = client.get(f"{settings.PROMPT_REGISTRY_URL}/prompts/{file_type}")
         _raise_for_status_with_detail(prompt_resp, "Prompt registry")
         prompt_payload = prompt_resp.json()
+        logger.info(
+            "run_extraction_task: prompt-registry responded in %.2fs prompt_len=%d",
+            time.monotonic() - prompt_started_at, len(prompt_payload.get("prompt") or ""),
+            extra={**log_extra, "step": "prompt_registry_call"},
+        )
+
+        kb_appendix = _build_knowledge_base_prompt_appendix(file_type)
+        product_model_appendix = _build_product_model_appendix(file_type, product_model)
+        target_characteristics_appendix = _build_target_characteristics_appendix(
+            file_type, target_characteristics
+        )
+        logger.info(
+            "run_extraction_task: prompt appendices built kb_len=%d product_model_len=%d "
+            "target_characteristics_len=%d",
+            len(kb_appendix), len(product_model_appendix), len(target_characteristics_appendix),
+            extra={**log_extra, "step": "prompt_appendix_build"},
+        )
 
         extraction_payload = {
             "analysis_id": analysis_id,
@@ -575,20 +609,31 @@ def run_extraction_task(
             "file_url": file_url,
             "prompt": (
                 (prompt_payload.get("prompt") or "")
-                + _build_knowledge_base_prompt_appendix(file_type)
-                + _build_product_model_appendix(file_type, product_model)
-                + _build_target_characteristics_appendix(file_type, target_characteristics)
+                + kb_appendix
+                + product_model_appendix
+                + target_characteristics_appendix
             ),
             "schema": prompt_payload.get("schema"),
             "backend": extraction_backend or settings.EXTRACTION_BACKEND,
         }
 
+        extract_started_at = time.monotonic()
         extract_resp = client.post(
             f"{settings.EXTRACTION_SERVICE_URL}/extract",
             json=extraction_payload,
         )
         _raise_for_status_with_detail(extract_resp, "Extraction service")
+        extract_elapsed = time.monotonic() - extract_started_at
         result_payload = extract_resp.json()
+        geometry = (result_payload.get("extraction_metadata") or {}).get("geometry") or {}
+        logger.info(
+            "run_extraction_task: extraction-service responded in %.2fs "
+            "references=%s matched=%s unmatched=%s",
+            extract_elapsed,
+            geometry.get("reference_count"), geometry.get("matched_reference_count"),
+            geometry.get("unmatched_labels"),
+            extra={**log_extra, "step": "extraction_service_call"},
+        )
         # Порядок важен: сначала чиним плоский формат LLM-ответа во ВСЕХ местах
         # (result, pages[].extracted_data), и только потом собираем
         # extraction.products из pages — иначе он соберётся из искажённой структуры.
@@ -596,6 +641,7 @@ def run_extraction_task(
             logger.info(
                 "Wrapped flat characteristics list into a product (analysis=%s file_type=%s)",
                 analysis_id, file_type,
+                extra={**log_extra, "step": "normalize_flat_products"},
             )
         _normalize_docling_extraction(result_payload)
         flagged = _validate_characteristics_against_marking(result_payload)
@@ -604,6 +650,7 @@ def run_extraction_task(
                 "Marking validation: flagged %d characteristic(s) as low_confidence "
                 "(value contradicts model code; analysis=%s file_type=%s)",
                 flagged, analysis_id, file_type,
+                extra={**log_extra, "step": "marking_validation"},
             )
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
@@ -618,4 +665,9 @@ def run_extraction_task(
     with target.open("w", encoding="utf-8") as handle:
         json.dump(result_payload, handle, ensure_ascii=True, indent=2)
 
+    logger.info(
+        "run_extraction_task finished in %.2fs debug_file=%s",
+        time.monotonic() - started_at, target,
+        extra={**log_extra, "step": "run_extraction_task_finished"},
+    )
     return result_payload

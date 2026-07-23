@@ -1,5 +1,9 @@
 from celery import Celery
 
+from app.logging_setup import configure_logging
+
+configure_logging("domain-analyze-worker")
+
 from app.core.config import settings
 
 celery_app = Celery(

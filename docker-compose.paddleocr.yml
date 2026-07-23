@@ -1,0 +1,93 @@
+services:
+  # Полный GPU-стек paddleocr-vl-service (PaddleOCR-VL + Yandex Vision OCR),
+  # подключаемый как ещё один backend в extraction-service (см.
+  # extraction/app/config.py: PADDLEOCR_VL_ENABLED/YANDEX_VISION_OCR_ENABLED).
+  # Проект остаётся вне репозитория ivolga (build-контекст ссылается наружу
+  # относительным путём) — свой независимый git-репозиторий, свой жизненный
+  # цикл, не копируется/не дублируется внутрь ivolga.
+  #
+  # Запуск: docker compose -f docker-compose.yml -f docker-compose.paddleocr.yml up -d
+  # (по аналогии с уже существующим docker-compose.frontend.yml)
+  paddleocr-vl-api:
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${PADDLEOCR_API_IMAGE_TAG_SUFFIX}
+    container_name: paddleocr-vl-api
+    depends_on:
+      paddleocr-vlm-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    shm_size: 8g
+    user: root
+    restart: unless-stopped
+    environment:
+      - VLM_BACKEND=${PADDLEOCR_VLM_BACKEND:-vllm}
+    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_${PADDLEOCR_VLM_BACKEND:-vllm}.yaml"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  paddleocr-vlm-server:
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${PADDLEOCR_VLM_BACKEND:-vllm}-server:${PADDLEOCR_VLM_IMAGE_TAG_SUFFIX}
+    container_name: paddleocr-vlm-server
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    shm_size: 8g
+    user: root
+    restart: unless-stopped
+    volumes:
+      - ../../paddleocr-vl-service/vllm_backend_config.yaml:/home/paddleocr/vllm_backend_config.yaml:ro
+    command: /bin/bash -c "paddleocr genai_server --model_name PaddleOCR-VL-1.6-0.9B --host 0.0.0.0 --port 8080 --backend vllm --backend_config /home/paddleocr/vllm_backend_config.yaml"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 300s
+
+  # Имя контейнера/сервиса совпадает с PADDLEOCR_VL_SERVICE_URL по умолчанию
+  # (extraction/app/config.py) — extraction-service достаёт его по этому
+  # имени в default bridge-сети ivolga, без доп. настройки сети.
+  paddleocr-vl-service:
+    build: ../../paddleocr-vl-service/app
+    container_name: paddleocr-vl-service
+    depends_on:
+      paddleocr-vl-api:
+        condition: service_healthy
+    environment:
+      - PADDLEOCR_VL_URL=http://paddleocr-vl-api:8080
+      - OCR_PROVIDER=${PADDLEOCR_DEFAULT_PROVIDER:-paddle}
+      - YANDEX_API_KEY=${YANDEX_API_KEY}
+      - YANDEX_FOLDER_ID=${YANDEX_FOLDER_ID}
+      - YANDEX_MODEL_NAME=${YANDEX_MODEL_NAME:-deepseek-v4-flash}
+      - YANDEX_BASE_URL=${YANDEX_BASE_URL:-https://llm.api.cloud.yandex.net/v1}
+      - YANDEX_MAX_TOKENS=${YANDEX_MAX_TOKENS:-32000}
+      - YANDEX_TIMEOUT_SECONDS=${YANDEX_TIMEOUT_SECONDS:-240}
+      - YANDEX_CONCURRENCY=${YANDEX_CONCURRENCY:-2}
+      - YANDEX_VISION_URL=${YANDEX_VISION_URL:-https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText}
+      - YANDEX_VISION_MODEL=${YANDEX_VISION_MODEL:-table}
+      - YANDEX_VISION_TIMEOUT_SECONDS=${YANDEX_VISION_TIMEOUT_SECONDS:-60}
+      - YANDEX_VISION_RENDER_ZOOM=${YANDEX_VISION_RENDER_ZOOM:-2.0}
+      - YANDEX_VISION_CONCURRENCY=${YANDEX_VISION_CONCURRENCY:-2}
+    volumes:
+      - paddleocr-crops-data:/data/crops
+    # Явной секции networks нет — сервис попадает в default bridge-сеть
+    # ivolga (см. app/docker-compose.yml, там тоже нет networks:), поэтому
+    # extraction-service достаёт его по имени контейнера/сервиса напрямую.
+    # НЕ ставим depends_on от extraction-service сюда и обратно — недоступность
+    # этого сервиса не должна блокировать старт остального стека (см. план,
+    # "Стратегия минимального риска").
+
+volumes:
+  paddleocr-crops-data:

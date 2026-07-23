@@ -1,4 +1,5 @@
 import logging
+import time
 import traceback
 
 import httpx
@@ -25,6 +26,16 @@ def compare_documents(
     tz_data: dict,
     passport_data: dict,
 ) -> None:
+    log_extra = {"analysis_id": analysis_id, "job_id": job_id}
+    started_at = time.monotonic()
+    tz_product_count = len((tz_data or {}).get("products") or [])
+    passport_product_count = len((passport_data or {}).get("products") or [])
+    logger.info(
+        "compare_documents started: attempt=%s tz_products=%s passport_products=%s",
+        self.request.retries + 1, tz_product_count, passport_product_count,
+        extra={**log_extra, "step": "compare_documents_start"},
+    )
+    payload: dict | None = None
     try:
         result = compare_json(tz_data, passport_data)
         payload = {
@@ -33,6 +44,12 @@ def compare_documents(
             "status": "succeeded",
             "result": result,
         }
+        logger.info(
+            "compare_documents succeeded in %.2fs: comparisons=%s match=%s",
+            time.monotonic() - started_at,
+            len(result.get("comparisons") or []), result.get("match"),
+            extra={**log_extra, "step": "compare_documents_finished"},
+        )
     except Exception as exc:
         error_detail = "".join(
             [
@@ -42,10 +59,12 @@ def compare_documents(
             ]
         )
         logger.exception(
-            "Comparison task failed: analysis_id=%s job_id=%s attempt=%s",
+            "Comparison task failed: analysis_id=%s job_id=%s attempt=%s elapsed=%.2fs",
             analysis_id,
             job_id,
             self.request.retries + 1,
+            time.monotonic() - started_at,
+            extra={**log_extra, "step": "compare_documents_failed"},
         )
         raw = exc.raw if isinstance(exc, CompareParseError) else None
         payload = {
@@ -57,5 +76,15 @@ def compare_documents(
         }
         raise
     finally:
-        with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
-            client.post(f"{settings.API_GATEWAY_URL}/compare/callback", json=payload)
+        if payload is not None:
+            try:
+                with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+                    client.post(f"{settings.API_GATEWAY_URL}/compare/callback", json=payload)
+            except Exception:
+                logger.exception(
+                    "compare_documents: failed to deliver callback to api-gateway "
+                    "(comparison status=%s will not reach the analysis record)",
+                    payload.get("status"),
+                    extra={**log_extra, "step": "compare_documents_callback_failed"},
+                )
+                raise

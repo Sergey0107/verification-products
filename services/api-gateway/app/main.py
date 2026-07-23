@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.logging_setup import configure_logging
+
+configure_logging("api-gateway")
+
 from app.api.analyses import router as analyses_router
 from app.api.auth import get_current_user_optional, router as auth_router, validate_csrf
 from app.api.compare import router as compare_router

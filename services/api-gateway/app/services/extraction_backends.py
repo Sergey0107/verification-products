@@ -1,11 +1,15 @@
 from app.core.config import settings
 
-SUPPORTED_EXTRACTION_BACKENDS = ("openrouter", "llamaparse", "mineru", "pdfplumber")
+SUPPORTED_EXTRACTION_BACKENDS = (
+    "openrouter", "llamaparse", "mineru", "pdfplumber", "paddleocr_vl", "yandex_vision_ocr",
+)
 EXTRACTION_BACKEND_LABELS = {
     "openrouter": "OpenRouter",
     "llamaparse": "LlamaParse + OpenRouter",
     "mineru": "MinerU + OpenRouter",
     "pdfplumber": "pdfplumber (точная геометрия) + OpenRouter",
+    "paddleocr_vl": "PaddleOCR-VL (GPU) + Yandex DeepSeek",
+    "yandex_vision_ocr": "Yandex Vision OCR + Yandex DeepSeek",
 }
 
 

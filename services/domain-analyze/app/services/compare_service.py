@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -7,6 +8,8 @@ import httpx
 
 from app.core.config import settings
 from app.services.knowledge_base_client import list_canonical_attributes, search_knowledge
+
+logger = logging.getLogger(__name__)
 
 
 class CompareParseError(RuntimeError):
@@ -867,6 +870,11 @@ def _compare_chunk(items: list[dict]) -> dict:
         "response_format": {"type": "json_object"},
     }
 
+    started_at = time.monotonic()
+    logger.info(
+        "compare_chunk: sending %d items to %s", len(items), settings.OPENROUTER_MODEL,
+        extra={"step": "compare_chunk_request"},
+    )
     with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
         resp = client.post(
             f"{settings.OPENROUTER_BASE_URL}/chat/completions",
@@ -876,14 +884,24 @@ def _compare_chunk(items: list[dict]) -> dict:
         resp.raise_for_status()
         data = resp.json()
 
+    elapsed = time.monotonic() - started_at
     content = (
         data.get("choices", [{}])[0]
         .get("message", {})
         .get("content", "")
     )
+    logger.info(
+        "compare_chunk: response received in %.2fs usage=%s content_len=%d",
+        elapsed, data.get("usage"), len(content),
+        extra={"step": "compare_chunk_response"},
+    )
     try:
         return _extract_json(content)
     except json.JSONDecodeError as exc:
+        logger.warning(
+            "compare_chunk: failed to parse LLM response as JSON: %s", exc,
+            extra={"step": "compare_chunk_parse_error"},
+        )
         raise CompareParseError(str(exc), content)
 
 
@@ -892,6 +910,7 @@ def _build_kb_prompt_appendix(items: list[dict[str, Any]]) -> str:
     try:
         attributes = list_canonical_attributes()
     except Exception:
+        logger.warning("Failed to fetch canonical attributes from knowledge-base", exc_info=True)
         attributes = []
     if attributes:
         lines = ["\nКанонические атрибуты из Knowledge Base:"]
@@ -916,6 +935,7 @@ def _build_kb_prompt_appendix(items: list[dict[str, Any]]) -> str:
         try:
             retrieval = search_knowledge(retrieval_query, limit=5)
         except Exception:
+            logger.warning("Failed to search knowledge-base for %r", retrieval_query, exc_info=True)
             retrieval = []
         if retrieval:
             lines = ["\nРелевантные выдержки из Knowledge Base:"]
@@ -932,6 +952,10 @@ def _build_kb_prompt_appendix(items: list[dict[str, Any]]) -> str:
 
 
 def _repair_json(raw_text: str, schema: dict) -> dict:
+    logger.info(
+        "repair_json: attempting to repair unparsable LLM response (%d chars)", len(raw_text),
+        extra={"step": "compare_repair_json"},
+    )
     system_message = (
         "Ты — валидатор JSON. Преобразуй входной текст в валидный JSON, "
         "строго соответствующий схеме. Верни ТОЛЬКО JSON без пояснений."
@@ -970,8 +994,17 @@ def _repair_json(raw_text: str, schema: dict) -> dict:
 
 
 def compare_json(tz_data: dict, passport_data: dict) -> dict:
+    started_at = time.monotonic()
     items = _build_comparison_items(tz_data, passport_data)
+    logger.info(
+        "compare_json started: %d comparison items", len(items),
+        extra={"step": "compare_json_start"},
+    )
     if not items:
+        logger.warning(
+            "compare_json: no comparison items built from tz_data/passport_data",
+            extra={"step": "compare_json_start"},
+        )
         return {
             "match": False,
             "summary": "Нет данных для сравнения.",
@@ -980,20 +1013,36 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
 
     chunk_size = settings.COMPARE_CHUNK_SIZE
     chunks = _chunk(items, chunk_size)
+    logger.info(
+        "compare_json: split into %d chunk(s) of size<=%d", len(chunks), chunk_size,
+        extra={"step": "compare_json_chunks"},
+    )
 
     all_comparisons: list[dict] = []
     summaries: list[str] = []
     debug_chunk: dict | None = None
 
-    for chunk_items in chunks:
+    for chunk_index, chunk_items in enumerate(chunks):
         if not chunk_items:
             continue
         try:
             result = _compare_chunk(chunk_items)
         except CompareParseError as exc:
+            logger.warning(
+                "compare_json: chunk %d/%d failed to parse, attempting repair: %s",
+                chunk_index + 1, len(chunks), exc,
+                extra={"step": "compare_json_chunk_repair"},
+            )
             try:
                 result = _repair_json(exc.raw, _get_prompt().get("schema", {}))
             except Exception:
+                logger.error(
+                    "compare_json: chunk %d/%d repair also failed; %d items in this chunk "
+                    "will be replaced with empty comparisons",
+                    chunk_index + 1, len(chunks), len(chunk_items),
+                    exc_info=True,
+                    extra={"step": "compare_json_chunk_repair_failed"},
+                )
                 result = {"comparisons": [], "summary": ""}
 
         comparisons = result.get("comparisons", [])
@@ -1052,6 +1101,7 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
     match_value = all(
         item.get("is_match") is True for item in all_comparisons
     )
+    mismatches = [c for c in all_comparisons if c.get("is_match") is not True]
     summary_text = " ".join(summaries).strip()
     result_payload = {
         "match": match_value,
@@ -1060,4 +1110,9 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
     }
     if debug_chunk is not None:
         result_payload["debug_chunk"] = debug_chunk
+    logger.info(
+        "compare_json finished in %.2fs: comparisons=%d mismatches=%d match=%s",
+        time.monotonic() - started_at, len(all_comparisons), len(mismatches), match_value,
+        extra={"step": "compare_json_finished"},
+    )
     return result_payload

@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import time
 import traceback
 
 import httpx
@@ -90,6 +91,15 @@ def extract_file(
     product_model: str | None = None,
 ) -> None:
     attempt = self.request.retries + 1
+    log_extra = {
+        "analysis_id": analysis_id, "file_id": file_id, "file_type": file_type, "step": "extract_file",
+    }
+    started_at = time.monotonic()
+    logger.info(
+        "extract_file task started job_id=%s attempt=%s backend=%s",
+        job_id, attempt, extraction_backend,
+        extra=log_extra,
+    )
     mark_job_running(job_id, attempt)
     try:
         result_payload = run_extraction_task(
@@ -145,6 +155,9 @@ def extract_file(
                     },
                 )
                 session.commit()
+                logger.info(
+                    "extract_file: analysis moved to tz_review", extra=log_extra,
+                )
 
             if file_type == "passport" and "passport" in by_type:
                 approved_rows = _approved_review_characteristics(session, analysis_id)
@@ -181,6 +194,12 @@ def extract_file(
                         "tz_data": _filtered_tz_payload(approved_rows),
                         "passport_data": by_type["passport"],
                     }
+                    logger.info(
+                        "extract_file: analysis moved to analyzing_data, comparison job_id=%s "
+                        "tz_characteristics=%d",
+                        compare_job_id, len(approved_rows),
+                        extra=log_extra,
+                    )
                     with httpx.Client(timeout=settings.EXTRACTION_TIMEOUT_SECONDS) as client:
                         client.post(
                             f"{settings.DOMAIN_ANALYZE_URL}/compare/jobs",
@@ -196,13 +215,16 @@ def extract_file(
             ]
         )
         logger.exception(
-            "Extraction task failed: analysis_id=%s file_id=%s file_type=%s job_id=%s attempt=%s status=%s",
+            "Extraction task failed: analysis_id=%s file_id=%s file_type=%s job_id=%s attempt=%s "
+            "status=%s elapsed=%.2fs",
             analysis_id,
             file_id,
             file_type,
             job_id,
             attempt,
             status,
+            time.monotonic() - started_at,
+            extra=log_extra,
         )
         mark_job_failed(job_id, error_detail, status)
         if status == "failed":
@@ -228,3 +250,8 @@ def extract_file(
         raise
     else:
         mark_job_succeeded(job_id)
+        logger.info(
+            "extract_file task finished in %.2fs job_id=%s",
+            time.monotonic() - started_at, job_id,
+            extra=log_extra,
+        )
