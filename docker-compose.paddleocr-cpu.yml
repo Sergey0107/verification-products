@@ -1,0 +1,37 @@
+services:
+  # CPU-only вариант для серверов без GPU (81.26.176.172 и подобные): только
+  # Yandex Vision OCR + Yandex DeepSeek V4 Flash, оба облачные — GPU-сервисы
+  # paddleocr-vl-api/paddleocr-vlm-server из docker-compose.paddleocr.yml
+  # здесь намеренно не подключаются (нет смысла — без GPU не поднимутся).
+  #
+  # Запуск: docker compose -f docker-compose.yml -f docker-compose.paddleocr-cpu.yml up -d --build
+  paddleocr-vl-service:
+    build: ../../paddleocr-vl-service/app
+    container_name: paddleocr-vl-service
+    restart: unless-stopped
+    # env_file (не environment/${VAR}) — как и у остальных сервисов в
+    # docker-compose.yml, т.к. переменные лежат в env/.env, а не в .env
+    # в корне (compose ищет .env для interpolation только в CWD).
+    env_file:
+      - ./env/.env
+    environment:
+      - OCR_PROVIDER=yandex_vision
+      - YANDEX_MODEL_NAME=${YANDEX_MODEL_NAME:-deepseek-v4-flash}
+      - YANDEX_BASE_URL=${YANDEX_BASE_URL:-https://llm.api.cloud.yandex.net/v1}
+      - YANDEX_MAX_TOKENS=${YANDEX_MAX_TOKENS:-32000}
+      - YANDEX_TIMEOUT_SECONDS=${YANDEX_TIMEOUT_SECONDS:-240}
+      - YANDEX_CONCURRENCY=${YANDEX_CONCURRENCY:-2}
+      - YANDEX_VISION_URL=${YANDEX_VISION_URL:-https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText}
+      - YANDEX_VISION_MODEL=${YANDEX_VISION_MODEL:-table}
+      - YANDEX_VISION_TIMEOUT_SECONDS=${YANDEX_VISION_TIMEOUT_SECONDS:-60}
+      - YANDEX_VISION_RENDER_ZOOM=${YANDEX_VISION_RENDER_ZOOM:-2.0}
+      - YANDEX_VISION_CONCURRENCY=${YANDEX_VISION_CONCURRENCY:-2}
+    volumes:
+      - paddleocr-crops-data:/data/crops
+    # Явной секции networks нет — сервис попадает в default bridge-сеть
+    # ivolga (см. app/docker-compose.yml), extraction-service достаёт его
+    # по имени контейнера напрямую. Без depends_on от/на extraction-service —
+    # недоступность этого сервиса не должна блокировать остальной стек.
+
+volumes:
+  paddleocr-crops-data:
