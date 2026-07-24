@@ -58,6 +58,7 @@ async def compare_callback(payload: dict, db: AsyncSession = Depends(get_db)):
             passport_value = str(passport_value) if passport_value is not None else None
             row = ComparisonRow(
                 analysis_id=analysis_id,
+                product_name=item.get("product_name"),
                 characteristic=item.get("characteristic") or "",
                 tz_value=tz_value,
                 passport_value=passport_value,

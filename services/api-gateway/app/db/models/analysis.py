@@ -33,6 +33,12 @@ class ComparisonRow(Base):
         server_default=text("gen_random_uuid()"),
     )
     analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    # Изделие паспорта, к которому относится эта строка сравнения — заполняется,
+    # когда паспорт содержит несколько моделей/исполнений одного изделия (см.
+    # compare_service._build_comparison_items: product_name уже формировался
+    # LLM-сравнением, но раньше терялся при сохранении в эту таблицу). NULL —
+    # паспорт с одной моделью, разделение по изделиям не применимо.
+    product_name = Column(String, nullable=True)
     characteristic = Column(String, nullable=False)
     tz_value = Column(Text)
     passport_value = Column(Text)

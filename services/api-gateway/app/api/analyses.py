@@ -591,6 +591,7 @@ def _build_viewer_row(
     )
     return {
         "row_id": row_id,
+        "product_name": row.product_name,
         "characteristic": row.characteristic,
         "tz_value": row.tz_value,
         "passport_value": row.passport_value,
