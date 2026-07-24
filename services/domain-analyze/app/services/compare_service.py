@@ -723,6 +723,22 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                 )
         return items
 
+    # "Общее" в ТЗ — характеристики без привязки к конкретной модели изделия
+    # (напр. "Максимальный расход" в самом верху ТЗ, до таблицы моделей). В
+    # паспорте с несколькими изделиями такая характеристика физически лежит
+    # ВНУТРИ каждой модели (др. значение на модель), а не в паспортном
+    # "Общее" — точное совпадение по имени изделия её не находит, хотя
+    # данные в документе есть (см. разбор пользователя: "Максимальный
+    # расход/напор" нашлись в паспорте по всем 6 моделям, но 0 совп. в UI).
+    # Фолбэк: если у ТЗ-продукта "Общее" характеристика не нашлась в
+    # одноимённом паспортном продукте — ищем её по ВСЕМ остальным паспортным
+    # изделиям и собираем все найденные значения как кандидатов (та же идея,
+    # что уже применяется для нескольких упоминаний внутри одного изделия).
+    tz_general_name = next(
+        (p.get("product_name") for p in tz_products if p.get("product_name") == "Общее"),
+        None,
+    )
+
     for product in ordered_products:
         product_name = product.get("product_name") or "Неизвестное изделие"
         tz_chars_map = tz_map.get(product_name, {})
@@ -736,6 +752,13 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
         for char_name in ordered_char_names:
             tz_entry = _primary_entry(tz_chars_map.get(char_name, []))
             passport_candidates = passport_chars_map.get(char_name, [])
+            if not passport_candidates and product_name == tz_general_name:
+                for other_product_name, other_chars_map in passport_map.items():
+                    if other_product_name == product_name:
+                        continue
+                    passport_candidates = passport_candidates + other_chars_map.get(
+                        char_name, []
+                    )
             passport_entry = _primary_entry(passport_candidates)
             items.append(
                 {
