@@ -217,11 +217,41 @@ def _build_characteristic_evidence(file_type: str, references: list[object], val
     }
 
 
+# Условие режима работы в имени изделия: "ДЖАМБО 60/35, напор 5 м". Модель
+# извлечения иногда дробит одну модель на псевдо-изделия по рабочим точкам —
+# получаются десятки групп с одной характеристикой вместо одной группы с
+# десятком значений. Промпты это запрещают, но защита нужна и для уже
+# посчитанных анализов, где данные исправить уже нельзя.
+_PRODUCT_CONDITION_RE = re.compile(
+    r"^(?P<product>.+?),\s*(?P<condition>(?:напор|давлени|температур|частот|плотност|расход)\w*\s+.+)$",
+    re.IGNORECASE,
+)
+
+
+def _split_product_condition(product_name: str) -> tuple[str, str | None]:
+    """Отделяет режим работы от обозначения изделия.
+
+    'ДЖАМБО 60/35, напор 5 м' -> ('ДЖАМБО 60/35', 'напоре 5 м')
+    'ДЖАМБО 60/35'            -> ('ДЖАМБО 60/35', None)
+
+    Условие возвращается в предложном падеже, чтобы подставляться в название
+    характеристики после «при»: «Подача при напоре 5 м»."""
+    match = _PRODUCT_CONDITION_RE.match(product_name.strip())
+    if not match:
+        return product_name, None
+    condition = match.group("condition").strip()
+    # «напор 5 м» -> «напоре 5 м»; для остальных слов падеж не меняем —
+    # получится «при давление 0,4 МПа», что читается хуже, но не искажает смысл.
+    condition = re.sub(r"^напор\b", "напоре", condition, flags=re.IGNORECASE)
+    return match.group("product").strip(), condition
+
+
 def _build_document_characteristics(file_type: str, payload: dict | None) -> list[dict]:
     products = _extract_products_from_payload(payload)
     items: list[dict] = []
     for product_index, product in enumerate(products):
         product_name = str(product.get("product_name") or "Неизвестное изделие")
+        product_name, condition = _split_product_condition(product_name)
         characteristics = product.get("characteristics")
         if not isinstance(characteristics, list):
             continue
@@ -231,6 +261,10 @@ def _build_document_characteristics(file_type: str, payload: dict | None) -> lis
             name = str(characteristic.get("name") or "").strip()
             if not name:
                 continue
+            # Условие из имени изделия ("ДЖАМБО 60/35, напор 5 м") переносим в
+            # название характеристики: "Подача" -> "Подача при напоре 5 м".
+            if condition:
+                name = f"{name} при {condition}"
             value = characteristic.get("value")
             value_text = str(value) if value is not None else ""
             references = characteristic.get("references")
