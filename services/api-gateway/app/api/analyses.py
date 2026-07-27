@@ -592,6 +592,9 @@ def _build_viewer_row(
     return {
         "row_id": row_id,
         "product_name": row.product_name,
+        # None трактуется фронтендом как True (показывать) — так строки,
+        # созданные до появления колонки, не пропадают из списка.
+        "is_target_model": row.is_target_model,
         "characteristic": row.characteristic,
         "tz_value": row.tz_value,
         "passport_value": row.passport_value,

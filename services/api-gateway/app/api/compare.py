@@ -59,6 +59,7 @@ async def compare_callback(payload: dict, db: AsyncSession = Depends(get_db)):
             row = ComparisonRow(
                 analysis_id=analysis_id,
                 product_name=item.get("product_name"),
+                is_target_model=item.get("is_target_model"),
                 characteristic=item.get("characteristic") or "",
                 tz_value=tz_value,
                 passport_value=passport_value,

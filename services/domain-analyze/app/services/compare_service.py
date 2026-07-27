@@ -73,7 +73,12 @@ def _model_size_cores(value: Any) -> set[str]:
 
 def _models_match(tz_model: Any, passport_model: Any) -> bool:
     """Модели совпадают, если: (1) нормализованные строки равны/вложены, ИЛИ
-    (2) есть общее числовое ядро типоразмера (устойчиво к разным префиксам)."""
+    (2) есть общее числовое ядро типоразмера (устойчиво к разным префиксам).
+
+    Сравнение больше НЕ отбрасывает изделия «не той» модели (все модели
+    паспорта доходят до UI, он и фильтрует) — но сопоставление кода модели
+    ТЗ с кодом модели паспорта по-прежнему нужно, чтобы пометить строки
+    целевой модели, см. _mark_target_model_items."""
     norm_tz = _normalize_model(tz_model)
     norm_pp = _normalize_model(passport_model)
     if norm_tz and norm_pp and (norm_tz == norm_pp or norm_tz in norm_pp or norm_pp in norm_tz):
@@ -81,31 +86,6 @@ def _models_match(tz_model: Any, passport_model: Any) -> bool:
     tz_cores = _model_size_cores(tz_model)
     pp_cores = _model_size_cores(passport_model)
     return bool(tz_cores & pp_cores)
-
-
-def _filter_products_by_target_model(
-    tz_products: list[dict], passport_products: list[dict]
-) -> list[dict]:
-    """Если в ТЗ задана модель изделия, сравнивать нужно строго с ней:
-    оставляем в паспорте только изделия той же модели. Совпадение определяем
-    по числовому ядру типоразмера (устойчиво к разным префиксам: КС 50-110/4 ↔
-    1Кс50-110). Фильтруем лишь когда цель однозначна (в ТЗ одна модель) и в
-    паспорте есть совпадение — иначе возвращаем как есть, чтобы не потерять данные."""
-    target_models = [
-        p.get("product_model")
-        for p in tz_products
-        if _normalize_model(p.get("product_model"))
-    ]
-    unique_targets = {_normalize_model(m) for m in target_models}
-    if len(unique_targets) != 1:
-        return passport_products
-
-    target = target_models[0]
-    matching = [
-        p for p in passport_products
-        if _models_match(target, p.get("product_model"))
-    ]
-    return matching or passport_products
 
 
 def _collect_products_from_pages(pages: Any) -> list[dict]:
@@ -664,19 +644,75 @@ def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict
     return items
 
 
+def _mark_target_model_items(
+    items: list[dict], tz_products: list[dict], passport_products: list[dict]
+) -> list[dict]:
+    """Проставляет is_target_model у каждой строки сравнения.
+
+    Сравнение возвращает строки по ВСЕМ моделям паспорта, а UI по умолчанию
+    показывает только ту, которую запросил пользователь (плюс «Общее»). Но
+    название модели в ТЗ и в паспорте пишется по-разному ('КС 50-110/4' vs
+    '1Кс50-110'), поэтому сопоставлять их строкой нельзя — используем
+    _models_match (числовое ядро типоразмера).
+
+    True  — строка относится к целевой модели ИЛИ к общим характеристикам
+            («Общее» — они применимы к любой модели, поэтому показываются всегда);
+    False — строка относится к другой модели каталога.
+    Если целевая модель не задана или не нашлась в паспорте — помечаем все
+    строки True, чтобы UI ничего не скрыл (лучше показать лишнее, чем спрятать
+    единственные найденные данные)."""
+    target_models = [
+        p.get("product_model")
+        for p in tz_products
+        if _normalize_model(p.get("product_model"))
+    ]
+    unique_targets = {_normalize_model(m) for m in target_models}
+    if len(unique_targets) != 1:
+        for item in items:
+            item["is_target_model"] = True
+        return items
+
+    target = target_models[0]
+    # Имена изделий паспорта, чей код модели совпал с целевым.
+    matched_names = {
+        p.get("product_name") or "Неизвестное изделие"
+        for p in passport_products
+        if _models_match(target, p.get("product_model"))
+    }
+    if not matched_names:
+        for item in items:
+            item["is_target_model"] = True
+        return items
+
+    for item in items:
+        product_name = item.get("product_name") or "Неизвестное изделие"
+        item["is_target_model"] = (
+            product_name in matched_names or product_name == "Общее"
+        )
+    return items
+
+
 def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
     tz_products = _normalize_products(tz_data)
     passport_products = _normalize_products(passport_data)
-    # Если в ТЗ задана конкретная модель — сравниваем строго с ней,
-    # отбрасывая из паспорта изделия других моделей.
-    passport_products = _filter_products_by_target_model(tz_products, passport_products)
+    # Изделия паспорта НЕ фильтруются по целевой модели: сравниваем все модели,
+    # которые описывает паспорт, и сохраняем результат целиком (product_name у
+    # каждой строки — см. ComparisonRow.product_name). Отбор нужной модели
+    # делает UI при отображении, поэтому данные по остальным моделям должны
+    # дойти до него, а не отбрасываться здесь. Раньше тут вызывался
+    # _filter_products_by_target_model, из-за чего характеристики прочих
+    # моделей терялись безвозвратно и группировать было нечего.
 
     # Один-к-одному: по одному изделию с каждой стороны — сравниваем их как пару,
     # НЕ завязываясь на совпадение product_name (в паспорте оно часто пустое →
     # иначе ТЗ и паспорт попадают в разные «изделия» и каждая характеристика
     # дублируется: один ряд только с ТЗ, второй только с паспортом).
     if len(tz_products) == 1 and len(passport_products) == 1:
-        return _compare_product_pair(tz_products[0], passport_products[0])
+        return _mark_target_model_items(
+            _compare_product_pair(tz_products[0], passport_products[0]),
+            tz_products,
+            passport_products,
+        )
 
     ordered_products = _ordered_products(tz_products, passport_products)
 
@@ -721,7 +757,7 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                         "passport_value_candidates": passport_candidates,
                     }
                 )
-        return items
+        return _mark_target_model_items(items, tz_products, passport_products)
 
     # "Общее" в ТЗ — характеристики без привязки к конкретной модели изделия
     # (напр. "Максимальный расход" в самом верху ТЗ, до таблицы моделей). В
@@ -771,7 +807,7 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                     "passport_value_candidates": passport_candidates,
                 }
             )
-    return items
+    return _mark_target_model_items(items, tz_products, passport_products)
 
 
 def _attach_evidence_to_comparison(item: dict[str, Any], comparison: dict[str, Any]) -> dict[str, Any]:
@@ -1095,6 +1131,12 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
             )
             comparisons[idx]["tz_value"] = item.get("tz_value")
             comparisons[idx]["passport_value"] = item.get("passport_value")
+            # Изделие паспорта и признак «это модель, которую запросил
+            # пользователь» — берём из исходного item, LLM их не формирует.
+            # По ним UI группирует строки и по умолчанию показывает только
+            # целевую модель (плюс «Общее»).
+            comparisons[idx]["product_name"] = item.get("product_name")
+            comparisons[idx]["is_target_model"] = item.get("is_target_model", True)
             # Если значения однозначно совпадают, всегда ставим is_match=True,
             # независимо от того, что вернула LLM
             if _values_clearly_match(item.get("tz_value"), item.get("passport_value")):

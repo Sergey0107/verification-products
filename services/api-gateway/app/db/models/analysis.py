@@ -39,6 +39,11 @@ class ComparisonRow(Base):
     # LLM-сравнением, но раньше терялся при сохранении в эту таблицу). NULL —
     # паспорт с одной моделью, разделение по изделиям не применимо.
     product_name = Column(String, nullable=True)
+    # False — строка относится к модели каталога, которую пользователь НЕ
+    # запрашивал: сравнение считает все модели паспорта, а UI по умолчанию
+    # показывает только целевую (плюс общие характеристики). NULL/True —
+    # показывать всегда (целевая модель, «Общее», либо модель не задана).
+    is_target_model = Column(Boolean, nullable=True)
     characteristic = Column(String, nullable=False)
     tz_value = Column(Text)
     passport_value = Column(Text)

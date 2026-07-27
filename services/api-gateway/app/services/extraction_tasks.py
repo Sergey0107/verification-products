@@ -439,27 +439,35 @@ def _build_target_characteristics_appendix(
                 f"is the right one even if its prefix is not identical.\n"
             )
         model_hint = (
-            f"\nIMPORTANT — MODEL SELECTION. The passport usually lists MANY models. "
-            f"Extract values strictly for model '{product_model}'"
+            f"\nIMPORTANT — MULTI-MODEL EXTRACTION. The passport usually lists MANY models. "
+            f"Extract the requested characteristics for EVERY model the passport describes — "
+            f"one separate object in `products` per model, each with its own `product_name` "
+            f"and `product_model`. Do NOT limit the output to a single model.\n"
+            f"- The model '{product_model}'"
             + (f" (product: '{product_name}')" if product_name else "")
-            + "."
+            + " is the one the customer asked about, so it MUST be present in the output "
+            "among the others — but the other models MUST be extracted too."
             + aliases_text
             + core_hint
             + " Rules for model-keyed tables:\n"
-            f"- ALL extracted values MUST come from the SAME model row/column. "
+            f"- Within ONE product object, ALL values MUST come from the SAME model row/column. "
             f"It is a serious error to take Производительность from one model and Вес from another — "
-            f"every characteristic must describe the SAME physical pump '{product_model}'.\n"
+            f"every characteristic inside one product object must describe the SAME physical pump.\n"
             f"- A value belongs to the model written ON THE SAME ROW (or in the SAME COLUMN). "
             f"Do NOT take the value from a neighbouring model's row/column — values for "
-            f"adjacent models often look similar, so align the row to '{product_model}' EXACTLY.\n"
+            f"adjacent models often look similar, so align each row to ITS model EXACTLY.\n"
+            "- Characteristics that are common to ALL models (напр. Напряжение, Частота тока, "
+            "Степень защиты — written once for the whole family, not per model) go into a "
+            "SEPARATE product object with \"product_name\": \"Общее\" and \"product_model\": null. "
+            "Do NOT duplicate them into every model.\n"
             f"- Match the model code allowing spacing/separator/prefix differences "
             f"(e.g. 'ХМ-3,2/4Т-0.18-G1' == 'ХМ 3,2/4Т-0,18-G1'; 'КС 50-110/4' == '1Кс50-110').\n"
             "- DIMENSIONS (Габаритные размеры / габариты): these are frequently in a SEPARATE "
             "table whose columns use short headers like 'L', 'B', 'H', 'L1', 'B1', etc. "
-            "Find the EXACT row matching the target model in THAT table and take L, B (or W/Ширина), "
-            "H values from THAT SINGLE ROW. Never mix values from different rows — e.g. do NOT "
-            "take L from row '1Кс12-50' and H from row '1Кс20-110'. If the target model is not in "
-            "the table, return null.\n"
+            "For EACH model, find the EXACT row matching THAT model in THAT table and take "
+            "L, B (or W/Ширина), H values from THAT SINGLE ROW. Never mix values from different "
+            "rows — e.g. do NOT take L from row '1Кс12-50' and H from row '1Кс20-110'. If a "
+            "model is not in the table, return null for it.\n"
             "- WEIGHT (Вес / Масса): the dimensions table often has a 'Масса, кг' column — this "
             "is the catalog mass for a SPECIFIC model variant, NOT the total 'Вес насоса' or 'Вес "
             "агрегата'. For characteristics named 'Вес: Насоса', 'Вес: Электродвигателя', 'Вес: "
@@ -479,31 +487,44 @@ def _build_target_characteristics_appendix(
             "Подача/Напор/Мощность table) and 'Мощность электродвигателя' (selected motor power, in "
             "the motor-selection table) are DIFFERENT values. Map each requested characteristic to "
             "the correct source table by its name; do not substitute one for the other.\n"
-            f"- If you cannot reliably identify the value for '{product_model}', return "
-            "\"value\": null rather than guessing from another model.\n"
+            "- If you cannot reliably identify the value of a characteristic for a given model, "
+            "return \"value\": null for THAT model rather than guessing from another model.\n"
         )
     else:
-        # Модель не задана — но все характеристики всё равно должны относиться к
-        # ОДНОМУ изделию, а не быть собраны из разных моделей каталога.
+        # Модель не задана — извлекаем ВСЕ модели паспорта, каждую отдельным
+        # объектом products[]. Требование «не смешивать значения разных
+        # моделей» остаётся, но теперь действует ВНУТРИ одного объекта, а не
+        # между ними: фильтрацию по нужной модели делает UI, и для этого ему
+        # нужны данные по всем моделям сразу.
         model_hint = (
-            "\nIMPORTANT — SINGLE MODEL CONSISTENCY. The passport may list MANY pump models. "
-            "No specific target model was given, so FIRST identify the single model whose "
-            "characteristics best match the requested list, then extract ALL values from THAT "
-            "ONE model only. Never combine values from different models/pages: it is a serious "
-            "error to take Производительность from one model and Вес from another. Every "
-            "characteristic must describe the SAME physical product. Prefer the model that has "
-            "the most of the requested characteristics on the same page/table.\n"
+            "\nIMPORTANT — MULTI-MODEL EXTRACTION. The passport may list MANY product models. "
+            "Extract the requested characteristics for EVERY model the passport describes — "
+            "one separate object in `products` per model, each with its own `product_name` "
+            "and `product_model`. Do NOT pick just one model.\n"
+            "- Within ONE product object, ALL values MUST come from the SAME model row/column: "
+            "it is a serious error to take Производительность from one model and Вес from "
+            "another. Every characteristic inside one object must describe the SAME physical "
+            "product.\n"
+            "- Characteristics that are common to ALL models (напр. Напряжение, Частота тока, "
+            "Степень защиты — written once for the whole family, not per model) go into a "
+            "SEPARATE product object with \"product_name\": \"Общее\" and \"product_model\": null. "
+            "Do NOT duplicate them into every model.\n"
+            "- If a characteristic is absent for a given model, return \"value\": null for THAT "
+            "model rather than borrowing the value from another model.\n"
         )
 
     count = len(target_names)
     return (
         "\n\n=== PASSPORT EXTRACTION SCOPE (overrides any earlier 'extract ALL' instruction) ===\n"
-        f"Below is a fixed list of {count} characteristic NAMES. Your output MUST contain "
-        f"EXACTLY these {count} characteristics — no more, no fewer — one object per name, "
-        "in the SAME ORDER, using each name VERBATIM as the `name` field. "
+        f"Below is a fixed list of {count} characteristic NAMES. EACH product object in "
+        f"`products` MUST contain EXACTLY these {count} characteristics — no more, no fewer — "
+        "one object per name, in the SAME ORDER, using each name VERBATIM as the `name` field. "
         "Ignore every other characteristic in the passport; extract ONLY these.\n"
-        "For each name, read its value AS WRITTEN IN THE PASSPORT for the requested model. "
-        "You are NOT given the expected values — read them from the passport. "
+        "The number of product objects is NOT limited: return one per model described by the "
+        "passport (plus, if applicable, one \"Общее\" object for family-wide values) — see the "
+        "multi-model rules below.\n"
+        "For each name, read its value AS WRITTEN IN THE PASSPORT for the model of that product "
+        "object. You are NOT given the expected values — read them from the passport. "
         "Never invent, guess, or copy a value from the requirement: every value MUST come "
         "from the passport, and its quote_text/reference must contain that exact value. "
         "If a characteristic is genuinely absent from the passport, STILL include it with "
