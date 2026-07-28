@@ -195,13 +195,61 @@ def _ordered_products(tz_products: list[dict], passport_products: list[dict]) ->
     return ordered
 
 
+# Слова, которые документы добавляют к названию характеристики, не меняя её
+# смысла: ТЗ пишет «Напряжение», паспорт — «Напряжение электропитания»; ТЗ
+# «Подача при напоре 10 м», паспорт — «Подача (расход) при напоре 10 м».
+# Сопоставление по точному имени объявляло такие пары разными
+# характеристиками, и обе половины уходили в «не найдено».
+# Намеренно НЕ включает «максимальный/минимальный/номинальный»: это не шум, а
+# разные величины («Максимальный напор» и «Номинальный напор» — разные строки
+# паспорта), и их слияние дало бы ложные совпадения.
+_CHAR_NAME_NOISE_RE = re.compile(
+    r"\b(?:электропитани\w*|питани\w*|сети|не\s+менее|не\s+более)\b",
+    re.IGNORECASE,
+)
+# Уточнение в скобках убирается вместе со скобками, но остальная часть имени
+# сохраняется: «Подача (расход) при напоре 10 м» → «подача при напоре 10 м», а
+# не «подача» — рабочая точка отличает характеристику от соседних.
+_CHAR_NAME_PARENS_RE = re.compile(r"\([^)]*\)")
+# Хвост после запятой — обычно единицы измерения: «Расход воды, л/с» = «Расход
+# воды».
+_CHAR_NAME_UNIT_RE = re.compile(r",.*$")
+
+
+def _normalize_char_name(name: Any) -> str:
+    """Ключ сопоставления характеристик ТЗ и паспорта.
+
+    Приводит к сравнимому виду формулировки, различающиеся только уточняющими
+    словами, единицами измерения и пунктуацией. Числа сохраняются: «при напоре
+    10 м» и «при напоре 15 м» — разные рабочие точки, а не одна характеристика.
+    """
+    text = str(name or "").strip().lower().replace("ё", "е")
+    if not text:
+        return ""
+    text = _CHAR_NAME_PARENS_RE.sub(" ", text)
+    text = _CHAR_NAME_UNIT_RE.sub(" ", text)
+    text = _CHAR_NAME_NOISE_RE.sub(" ", text)
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # Если убрали вообще всё (название состояло из одних уточнений) — держимся
+    # исходного текста, иначе разные характеристики схлопнулись бы в одну.
+    if not text:
+        return re.sub(r"\s+", " ", str(name or "").strip().lower())
+    return text
+
+
 def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
     """Характеристика -> СПИСОК всех встреченных записей {value, references}, а не
     одна (последняя). Документ может упоминать одну характеристику несколько раз
     с разными (в т.ч. противоречивыми) значениями — например разные рабочие точки
     или опечатка в другой таблице; раньше более раннее упоминание молча
     перезаписывалось. Первый элемент списка остаётся "основным" для мест кода,
-    которые пока умеют работать только с одним значением (LLM comparison prompt)."""
+    которые пока умеют работать только с одним значением (LLM comparison prompt).
+
+    Ключ — нормализованное имя (_normalize_char_name): ТЗ и паспорт называют
+    одну характеристику по-разному, и точное совпадение находило пару лишь в
+    единичных случаях. Исходное написание сохраняется в поле "name", чтобы в
+    UI и промпте характеристика называлась так же, как в документе."""
     result: dict[str, dict[str, list[dict]]] = {}
     for product in products:
         product_name = product.get("product_name") or "Неизвестное изделие"
@@ -210,8 +258,9 @@ def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
             name = item.get("name")
             if not name:
                 continue
-            result[product_name].setdefault(name, []).append(
+            result[product_name].setdefault(_normalize_char_name(name), []).append(
                 {
+                    "name": name,
                     "value": item.get("value"),
                     "references": item.get("references", []),
                 }
@@ -221,19 +270,24 @@ def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
 
 def _ordered_characteristics(
     tz_chars: list[dict], passport_chars: list[dict]
-) -> list[str]:
-    ordered = []
-    seen = set()
-    for item in tz_chars:
+) -> list[tuple[str, str]]:
+    """Пары (ключ сопоставления, отображаемое имя) в порядке ТЗ, затем паспорта.
+
+    Ключ нормализован, поэтому «Подача при напоре 10 м» из ТЗ и «Подача
+    (расход) при напоре 10 м» из паспорта дают одну строку сравнения. Показываем
+    название так, как оно записано в ТЗ (там формулировка требования), а для
+    характеристик, которых в ТЗ нет, — как в паспорте."""
+    ordered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in list(tz_chars) + list(passport_chars):
         name = item.get("name")
-        if name and name not in seen:
-            ordered.append(name)
-            seen.add(name)
-    for item in passport_chars:
-        name = item.get("name")
-        if name and name not in seen:
-            ordered.append(name)
-            seen.add(name)
+        if not name:
+            continue
+        key = _normalize_char_name(name)
+        if key in seen:
+            continue
+        ordered.append((key, name))
+        seen.add(key)
     return ordered
 
 
@@ -594,8 +648,8 @@ def _build_evidence_payload(
 
 
 def _build_candidates_map(chars: list[dict]) -> dict[str, list[dict]]:
-    """Группирует характеристики по имени в СПИСОК всех встреченных записей
-    (не одну последнюю) — см. docstring _build_char_map."""
+    """Группирует характеристики по нормализованному имени в СПИСОК всех
+    встреченных записей (не одну последнюю) — см. docstring _build_char_map."""
     result: dict[str, list[dict]] = {}
     for c in chars:
         if not isinstance(c, dict):
@@ -603,7 +657,7 @@ def _build_candidates_map(chars: list[dict]) -> dict[str, list[dict]]:
         name = c.get("name")
         if not name:
             continue
-        result.setdefault(name, []).append(c)
+        result.setdefault(_normalize_char_name(name), []).append(c)
     return result
 
 
@@ -626,9 +680,9 @@ def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict
     tz_map = _build_candidates_map(tz_chars)
     passport_map = _build_candidates_map(passport_chars)
     items: list[dict] = []
-    for char_name in _ordered_characteristics(tz_chars, passport_chars):
-        tz_entry = _primary_entry(tz_map.get(char_name, []))
-        passport_candidates = passport_map.get(char_name, [])
+    for char_key, char_name in _ordered_characteristics(tz_chars, passport_chars):
+        tz_entry = _primary_entry(tz_map.get(char_key, []))
+        passport_candidates = passport_map.get(char_key, [])
         passport_entry = _primary_entry(passport_candidates)
         items.append(
             {
@@ -742,9 +796,9 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
             ordered_char_names = _ordered_characteristics(
                 tz_chars_list, passport_chars_list
             )
-            for char_name in ordered_char_names:
-                tz_entry = _primary_entry(tz_chars_map.get(char_name, []))
-                passport_candidates = passport_chars_map.get(char_name, [])
+            for char_key, char_name in ordered_char_names:
+                tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
+                passport_candidates = passport_chars_map.get(char_key, [])
                 passport_entry = _primary_entry(passport_candidates)
                 items.append(
                     {
@@ -785,15 +839,15 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
             tz_chars_list, passport_chars_list
         )
 
-        for char_name in ordered_char_names:
-            tz_entry = _primary_entry(tz_chars_map.get(char_name, []))
-            passport_candidates = passport_chars_map.get(char_name, [])
+        for char_key, char_name in ordered_char_names:
+            tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
+            passport_candidates = passport_chars_map.get(char_key, [])
             if not passport_candidates and product_name == tz_general_name:
                 for other_product_name, other_chars_map in passport_map.items():
                     if other_product_name == product_name:
                         continue
                     passport_candidates = passport_candidates + other_chars_map.get(
-                        char_name, []
+                        char_key, []
                     )
             passport_entry = _primary_entry(passport_candidates)
             items.append(
