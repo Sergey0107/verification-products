@@ -4,12 +4,12 @@ SUPPORTED_EXTRACTION_BACKENDS = (
     "openrouter", "llamaparse", "mineru", "pdfplumber", "paddleocr_vl", "yandex_vision_ocr",
 )
 EXTRACTION_BACKEND_LABELS = {
-    "openrouter": "OpenRouter",
-    "llamaparse": "LlamaParse + OpenRouter",
-    "mineru": "MinerU + OpenRouter",
-    "pdfplumber": "pdfplumber (точная геометрия) + OpenRouter",
-    "paddleocr_vl": "PaddleOCR-VL (GPU) + Yandex DeepSeek",
-    "yandex_vision_ocr": "Yandex Vision OCR + Yandex DeepSeek",
+    "openrouter": "AI Tunnel",
+    "llamaparse": "LlamaParse + AI Tunnel",
+    "mineru": "MinerU + AI Tunnel",
+    "pdfplumber": "pdfplumber (точная геометрия) + AI Tunnel",
+    "paddleocr_vl": "PaddleOCR-VL (GPU) + Yandex AI Studio",
+    "yandex_vision_ocr": "Yandex Vision OCR + Yandex AI Studio",
 }
 
 

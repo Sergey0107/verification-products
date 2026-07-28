@@ -193,6 +193,10 @@ def extract_file(
                         "analysis_id": analysis_id,
                         "tz_data": _filtered_tz_payload(approved_rows),
                         "passport_data": by_type["passport"],
+                        # Сравнение выполняет LLM того же провайдера, которым
+                        # извлекались характеристики: выбор в модалке задаёт оба
+                        # этапа анализа сразу.
+                        "extraction_backend": extraction_backend,
                     }
                     logger.info(
                         "extract_file: analysis moved to analyzing_data, comparison job_id=%s "

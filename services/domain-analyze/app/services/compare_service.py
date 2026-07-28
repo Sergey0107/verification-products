@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -897,7 +897,50 @@ def _chunk(items: list[dict], size: int) -> list[list[dict]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-def _compare_chunk(items: list[dict]) -> dict:
+class _LlmProvider(NamedTuple):
+    name: str
+    base_url: str
+    api_key: str
+    model: str
+
+
+# Оба этих backend'а структурируют текст моделью Yandex, поэтому и сравнение
+# выполняет модель из Yandex AI Studio — весь анализ идёт по одному стеку.
+# Остальные backend'ы (включая пустой, т.е. анализы, созданные до появления
+# выбора) сравниваются через AI Tunnel.
+_YANDEX_BACKENDS = frozenset({"yandex_vision_ocr", "paddleocr_vl"})
+
+
+def _resolve_llm_provider(extraction_backend: str | None) -> _LlmProvider:
+    backend = (extraction_backend or "").strip().lower()
+    if backend in _YANDEX_BACKENDS:
+        if not settings.YANDEX_API_KEY:
+            # Без ключа Yandex-запрос гарантированно вернёт 401, а сравнение
+            # упадёт целиком. AI Tunnel даёт корректный результат, поэтому
+            # деградируем к нему вместо отказа.
+            logger.warning(
+                "compare: backend=%s requires YANDEX_API_KEY, falling back to default provider",
+                backend,
+                extra={"step": "compare_provider_fallback"},
+            )
+        else:
+            return _LlmProvider(
+                name="yandex_ai_studio",
+                base_url=settings.YANDEX_BASE_URL,
+                api_key=settings.YANDEX_API_KEY,
+                # AI Studio требует полный идентификатор вида
+                # gpt://<folder>/<model>, короткое имя не принимается.
+                model=f"gpt://{settings.YANDEX_FOLDER_ID}/{settings.YANDEX_COMPARE_MODEL}",
+            )
+    return _LlmProvider(
+        name="ai_tunnel",
+        base_url=settings.OPENROUTER_BASE_URL,
+        api_key=settings.OPENROUTER_API_KEY,
+        model=settings.AITUNNEL_COMPARE_MODEL or settings.OPENROUTER_MODEL,
+    )
+
+
+def _compare_chunk(items: list[dict], extraction_backend: str | None = None) -> dict:
     if not items:
         return {"comparisons": [], "summary": ""}
     prompt_payload = _get_prompt()
@@ -915,12 +958,13 @@ def _compare_chunk(items: list[dict]) -> dict:
         ensure_ascii=False,
     )
 
+    provider = _resolve_llm_provider(extraction_backend)
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {provider.api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": provider.model,
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
@@ -931,12 +975,13 @@ def _compare_chunk(items: list[dict]) -> dict:
 
     started_at = time.monotonic()
     logger.info(
-        "compare_chunk: sending %d items to %s", len(items), settings.OPENROUTER_MODEL,
+        "compare_chunk: sending %d items to %s (%s)",
+        len(items), provider.model, provider.name,
         extra={"step": "compare_chunk_request"},
     )
     with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
         resp = client.post(
-            f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+            f"{provider.base_url}/chat/completions",
             headers=headers,
             json=payload,
         )
@@ -1010,7 +1055,7 @@ def _build_kb_prompt_appendix(items: list[dict[str, Any]]) -> str:
     return "\n\nИспользуй следующую Knowledge Base как источник истины для нормализации терминов и объяснимого сравнения:\n" + "\n\n".join(sections)
 
 
-def _repair_json(raw_text: str, schema: dict) -> dict:
+def _repair_json(raw_text: str, schema: dict, extraction_backend: str | None = None) -> dict:
     logger.info(
         "repair_json: attempting to repair unparsable LLM response (%d chars)", len(raw_text),
         extra={"step": "compare_repair_json"},
@@ -1023,12 +1068,13 @@ def _repair_json(raw_text: str, schema: dict) -> dict:
         {"schema": schema, "raw": raw_text},
         ensure_ascii=False,
     )
+    provider = _resolve_llm_provider(extraction_backend)
     headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {provider.api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": provider.model,
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
@@ -1038,7 +1084,7 @@ def _repair_json(raw_text: str, schema: dict) -> dict:
     }
     with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
         resp = client.post(
-            f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+            f"{provider.base_url}/chat/completions",
             headers=headers,
             json=payload,
         )
@@ -1052,7 +1098,9 @@ def _repair_json(raw_text: str, schema: dict) -> dict:
     return _extract_json(content)
 
 
-def compare_json(tz_data: dict, passport_data: dict) -> dict:
+def compare_json(
+    tz_data: dict, passport_data: dict, extraction_backend: str | None = None
+) -> dict:
     started_at = time.monotonic()
     items = _build_comparison_items(tz_data, passport_data)
     logger.info(
@@ -1085,7 +1133,7 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
         if not chunk_items:
             continue
         try:
-            result = _compare_chunk(chunk_items)
+            result = _compare_chunk(chunk_items, extraction_backend)
         except CompareParseError as exc:
             logger.warning(
                 "compare_json: chunk %d/%d failed to parse, attempting repair: %s",
@@ -1093,7 +1141,9 @@ def compare_json(tz_data: dict, passport_data: dict) -> dict:
                 extra={"step": "compare_json_chunk_repair"},
             )
             try:
-                result = _repair_json(exc.raw, _get_prompt().get("schema", {}))
+                result = _repair_json(
+                    exc.raw, _get_prompt().get("schema", {}), extraction_backend
+                )
             except Exception:
                 logger.error(
                     "compare_json: chunk %d/%d repair also failed; %d items in this chunk "

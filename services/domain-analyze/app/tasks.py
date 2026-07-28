@@ -25,19 +25,21 @@ def compare_documents(
     analysis_id: str,
     tz_data: dict,
     passport_data: dict,
+    extraction_backend: str | None = None,
 ) -> None:
     log_extra = {"analysis_id": analysis_id, "job_id": job_id}
     started_at = time.monotonic()
     tz_product_count = len((tz_data or {}).get("products") or [])
     passport_product_count = len((passport_data or {}).get("products") or [])
     logger.info(
-        "compare_documents started: attempt=%s tz_products=%s passport_products=%s",
+        "compare_documents started: attempt=%s tz_products=%s passport_products=%s backend=%s",
         self.request.retries + 1, tz_product_count, passport_product_count,
+        extraction_backend or "default",
         extra={**log_extra, "step": "compare_documents_start"},
     )
     payload: dict | None = None
     try:
-        result = compare_json(tz_data, passport_data)
+        result = compare_json(tz_data, passport_data, extraction_backend)
         payload = {
             "job_id": job_id,
             "analysis_id": analysis_id,

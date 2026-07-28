@@ -1051,6 +1051,28 @@ async def continue_tz_review(
     return {"ok": True, "status": "extracting_passport"}
 
 
+@router.get("/extraction-backends")
+async def list_extraction_backends(
+    current_user: User = Depends(get_current_user),
+):
+    """Режимы анализа, доступные в этой установке.
+
+    Выбранный режим задаёт провайдера для обоих этапов сразу — извлечения
+    характеристик и сравнения ТЗ с паспортом. paddleocr_vl требует GPU и
+    поднимается только локально, поэтому он появляется в списке лишь при
+    включённом PADDLEOCR_VL_ENABLED.
+    """
+    backends = ["yandex_vision_ocr", "openrouter"]
+    if settings.PADDLEOCR_VL_ENABLED:
+        backends.append("paddleocr_vl")
+    return {
+        "items": [
+            {"id": backend, "label": extraction_backend_label(backend)}
+            for backend in backends
+        ]
+    }
+
+
 @router.get("/analyses")
 async def list_analyses(
     db: AsyncSession = Depends(get_db),

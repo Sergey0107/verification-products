@@ -11,6 +11,9 @@ class CompareRequest(BaseModel):
     analysis_id: str
     tz_data: dict
     passport_data: dict
+    # Backend, которым извлекались характеристики. Определяет, какой LLM-провайдер
+    # выполнит сравнение, чтобы весь анализ шёл через один стек.
+    extraction_backend: str | None = None
 
 
 @router.get("/health")
@@ -29,6 +32,7 @@ async def create_compare_job(payload: CompareRequest):
             payload.tz_data,
             payload.passport_data,
         ],
+        kwargs={"extraction_backend": payload.extraction_backend},
         task_id=payload.job_id,
     )
     return {"ok": True, "job_id": payload.job_id}
