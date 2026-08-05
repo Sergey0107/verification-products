@@ -58,6 +58,11 @@ class ComparisonRow(Base):
     # списка (для обратной совместимости с местами кода, ожидающими одно
     # значение). Формат: [{"value": str|null, "evidence": {...}}].
     passport_value_candidates = Column(JSONB, nullable=True)
+    # Вхождения в паспорте, которые оператор подтвердил как относящиеся к этому
+    # требованию, когда характеристика найдена в нескольких местах. Список
+    # идентификаторов вхождений: ["<row_id>-candidate-0", ...]. NULL — оператор
+    # ещё не выбирал, показываем все найденные варианты как равнозначные.
+    confirmed_passport_matches = Column(JSONB, nullable=True)
     llm_result = Column(Boolean)
     user_result = Column(Boolean, nullable=True)
     note = Column(String)

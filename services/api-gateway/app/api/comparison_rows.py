@@ -36,6 +36,16 @@ class CommentPayload(BaseModel):
     comment: str
 
 
+class ConfirmedMatchesPayload(BaseModel):
+    """Вхождения в паспорте, подтверждённые оператором для этой строки.
+
+    Пустой список — оператор снял подтверждение со всех вариантов; строка
+    возвращается к состоянию «выбор не делали».
+    """
+
+    match_ids: list[str]
+
+
 class ManualPassportMatchPayload(BaseModel):
     value: str = Field(min_length=1)
     page: int = Field(ge=1)
@@ -89,6 +99,50 @@ async def set_user_result(
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/comparison-rows/{row_id}/confirmed-matches")
+async def set_confirmed_matches(
+    row_id: str,
+    payload: ConfirmedMatchesPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Оператор отметил, какие из найденных вхождений относятся к требованию.
+
+    Характеристика может встречаться в паспорте несколько раз (разные рабочие
+    точки, повтор в другой таблице), и какие из них правильные — решает
+    оператор. Подтверждение выбора означает, что строка признана совпадением,
+    поэтому вместе с ним проставляется user_result.
+    """
+    row_uuid = parse_uuid(row_id)
+    await _ensure_row_owned(db, row_uuid, current_user)
+
+    # Порядок вхождений не значим, дубликаты — следствие повторных кликов.
+    match_ids = sorted({item for item in payload.match_ids if item})
+    has_selection = bool(match_ids)
+
+    await db.execute(
+        update(ComparisonRow)
+        .where(ComparisonRow.id == row_uuid)
+        .values(
+            confirmed_passport_matches=match_ids if has_selection else None,
+            # Снятие всех отметок возвращает строку к вердикту LLM, а не
+            # фиксирует «не совпадает»: оператор просто отменил свой выбор.
+            user_result=True if has_selection else None,
+        )
+    )
+    if has_selection:
+        db.add(
+            UserEdit(
+                comparison_row_id=row_uuid,
+                user_id=current_user.id,
+                user_result=True,
+                comment=None,
+            )
+        )
+    await db.commit()
+    return {"ok": True, "match_ids": match_ids}
 
 
 @router.post("/comparison-rows/{row_id}/comment")

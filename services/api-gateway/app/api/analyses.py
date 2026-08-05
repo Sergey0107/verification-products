@@ -638,6 +638,9 @@ def _build_viewer_row(
         "passport_evidence": row.passport_evidence
         or _fallback_evidence("passport", row.passport_quote, row.passport_value),
         "passport_value_candidates": row.passport_value_candidates or [],
+        # null (а не []) — оператор ещё не выбирал: в интерфейсе все найденные
+        # вхождения равнозначны и подсвечены как требующие проверки.
+        "confirmed_passport_matches": row.confirmed_passport_matches,
         "user_comments": _build_user_comments(
             row_id, row.characteristic, user_edits_by_row, tz_comments_by_name
         ),
