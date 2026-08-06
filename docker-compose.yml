@@ -86,6 +86,8 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/conf.d/99-consumer-timeout.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 15s
