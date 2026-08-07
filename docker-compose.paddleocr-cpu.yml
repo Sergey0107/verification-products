@@ -20,12 +20,21 @@ services:
       - YANDEX_BASE_URL=${YANDEX_BASE_URL:-https://llm.api.cloud.yandex.net/v1}
       - YANDEX_MAX_TOKENS=${YANDEX_MAX_TOKENS:-32000}
       - YANDEX_TIMEOUT_SECONDS=${YANDEX_TIMEOUT_SECONDS:-240}
-      - YANDEX_CONCURRENCY=${YANDEX_CONCURRENCY:-2}
+      # ${VAR:-default} здесь интерполирует compose CLI из .env в CWD (его нет)
+      # или shell-окружения — env/.env он НЕ читает (это делает env_file:
+      # выше, но environment: имеет приоритет над ним для одинаковых имён).
+      # Оба семафора стояли на 2 не по конфигу, а по этим дефолтам: несколько
+      # анализов одновременно (или документ на много страниц) выстраивали
+      # очередь на такой узкий семафор быстрее, чем она рассасывалась — сумма
+      # ожидания упиралась в consumer_timeout RabbitMQ, брокер рвал канал,
+      # Celery доставлял задачу повторно, и она удваивала нагрузку на тот же
+      # самый семафор. Подняты с запасом над дефолтом кода (4/2).
+      - YANDEX_CONCURRENCY=${YANDEX_CONCURRENCY:-4}
       - YANDEX_VISION_URL=${YANDEX_VISION_URL:-https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText}
       - YANDEX_VISION_MODEL=${YANDEX_VISION_MODEL:-table}
       - YANDEX_VISION_TIMEOUT_SECONDS=${YANDEX_VISION_TIMEOUT_SECONDS:-60}
       - YANDEX_VISION_RENDER_ZOOM=${YANDEX_VISION_RENDER_ZOOM:-2.0}
-      - YANDEX_VISION_CONCURRENCY=${YANDEX_VISION_CONCURRENCY:-2}
+      - YANDEX_VISION_CONCURRENCY=${YANDEX_VISION_CONCURRENCY:-3}
     volumes:
       - paddleocr-crops-data:/data/crops
     # Явной секции networks нет — сервис попадает в default bridge-сеть
