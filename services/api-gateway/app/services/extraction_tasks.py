@@ -667,6 +667,12 @@ def run_extraction_task(
             ),
             "schema": prompt_payload.get("schema"),
             "backend": resolved_backend,
+            # Модель изделия, указанная пользователем (необязательно) — для
+            # openrouter уже используется в промпте через product_model_appendix
+            # выше; для yandex_vision_ocr/paddleocr_vl прокидывается отдельным
+            # полем, т.к. эти backend'ы промпт из prompt-registry не используют
+            # напрямую (см. _extract_via_paddleocr_vl в extraction-service).
+            "product_model": product_model,
         }
         # async_mode: только yandex_vision_ocr (облачная OCR+LLM цепочка на
         # больших документах, см. job_queue.py на стороне paddleocr-vl-service
