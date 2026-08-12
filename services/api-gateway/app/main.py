@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -50,10 +52,29 @@ CSRF_EXEMPT_PATHS = {
 }
 CSRF_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Пути из ALLOWED_PATHS, которые вызываются НЕ браузером, а другими сервисами:
+# пользовательской сессии у них нет, поэтому они защищены общим секретом
+# (см. INTERNAL_CALLBACK_SECRET). Без этого /files/callback был доступен
+# анониму из интернета, т.к. nginx проксирует весь префикс /files/.
+INTERNAL_CALLBACK_PATHS = {
+    "/files/callback",
+    "/compare/callback",
+    "/internal/extraction-callback",
+}
+
 
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     path = request.url.path
+    if path in INTERNAL_CALLBACK_PATHS:
+        expected = settings.INTERNAL_CALLBACK_SECRET
+        if expected:
+            provided = request.headers.get(settings.INTERNAL_CALLBACK_HEADER, "")
+            # compare_digest, а не ==: сравнение секретов должно быть
+            # constant-time, иначе по времени ответа секрет подбирается побайтно.
+            if not secrets.compare_digest(provided, expected):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
     if path in ALLOWED_PATHS:
         return await call_next(request)
 

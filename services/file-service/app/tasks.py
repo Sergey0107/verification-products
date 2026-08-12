@@ -40,7 +40,16 @@ def upload_to_s3(
         except OSError:
             pass
 
+    # Заголовок с общим секретом: api-gateway отклоняет callback без него
+    # (эндпоинт проксируется наружу через nginx, см. INTERNAL_CALLBACK_SECRET).
+    headers = (
+        {settings.INTERNAL_CALLBACK_HEADER: settings.INTERNAL_CALLBACK_SECRET}
+        if settings.INTERNAL_CALLBACK_SECRET
+        else {}
+    )
     with httpx.Client(timeout=10) as client:
-        client.post(f"{settings.API_GATEWAY_URL}/files/callback", json=payload)
+        client.post(
+            f"{settings.API_GATEWAY_URL}/files/callback", json=payload, headers=headers
+        )
 
     return payload

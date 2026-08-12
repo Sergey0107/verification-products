@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "rpc://"
     TMP_DIR: str = "/data/uploads"
     API_GATEWAY_URL: str = "http://api-gateway:8000"
+    # Общий секрет для /files/callback — api-gateway проверяет его в middleware
+    # (см. INTERNAL_CALLBACK_SECRET там же). Пустое значение = проверка
+    # выключена, callback уходит без заголовка (локальная разработка).
+    INTERNAL_CALLBACK_SECRET: str = ""
+    INTERNAL_CALLBACK_HEADER: str = "X-Internal-Secret"
 
 
 settings = Settings()

@@ -81,8 +81,19 @@ def compare_documents(
     finally:
         if payload is not None:
             try:
+                # Заголовок с общим секретом — api-gateway отклоняет callback
+                # без него (см. INTERNAL_CALLBACK_SECRET).
+                headers = (
+                    {settings.INTERNAL_CALLBACK_HEADER: settings.INTERNAL_CALLBACK_SECRET}
+                    if settings.INTERNAL_CALLBACK_SECRET
+                    else {}
+                )
                 with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
-                    client.post(f"{settings.API_GATEWAY_URL}/compare/callback", json=payload)
+                    client.post(
+                        f"{settings.API_GATEWAY_URL}/compare/callback",
+                        json=payload,
+                        headers=headers,
+                    )
             except Exception:
                 logger.exception(
                     "compare_documents: failed to deliver callback to api-gateway "

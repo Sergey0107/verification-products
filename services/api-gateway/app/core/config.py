@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
     COOKIE_DOMAIN: str | None = None
+    # Общий секрет для внутренних callback'ов (/files/callback,
+    # /compare/callback, /internal/extraction-callback). Они не проходят
+    # пользовательскую аутентификацию (их дёргают сервисы, а не браузер), а
+    # nginx проксирует наружу весь префикс /files/ — то есть /files/callback
+    # был доступен анониму из интернета: позволял подменить storage_path
+    # (чтение чужих файлов через presign), уронить чужой анализ в failed и
+    # запустить платный LLM-пайплайн. Тот же заголовок шлют file-service,
+    # domain-analyze и paddleocr-vl-service. Пустое значение = проверка
+    # выключена (для локальной разработки); в проде задаётся в env/.env.
+    INTERNAL_CALLBACK_SECRET: str = ""
+    INTERNAL_CALLBACK_HEADER: str = "X-Internal-Secret"
     PROMPT_REGISTRY_URL: str = "http://prompt-registry:8000"
     EXTRACTION_SERVICE_URL: str = "http://extraction-service:8000"
     EXTRACTION_BACKEND: str = "mineru"

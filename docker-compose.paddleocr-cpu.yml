@@ -67,6 +67,11 @@ services:
       # env/.env, поэтому значение продублировано, а не подставлено.
       - REDIS_URL=${REDIS_URL:-redis://:TITIzshx0qpbDiuTeNNHvXvHmTlFOdYkWXmHS6_IeBo@redis:6379/0}
       - EXTRACTION_CALLBACK_URL=${EXTRACTION_CALLBACK_URL:-http://api-gateway:8000/internal/extraction-callback}
+      # Общий секрет для callback'а — api-gateway отклоняет запрос без него.
+      # Значение должно совпадать с INTERNAL_CALLBACK_SECRET в env/.env
+      # (здесь интерполяция идёт из shell-окружения, не из env/.env — см.
+      # комментарий про REDIS_URL выше).
+      - INTERNAL_CALLBACK_SECRET=${INTERNAL_CALLBACK_SECRET:-}
       # Сколько документов обрабатываются одновременно ВНУТРИ сервиса —
       # страницы этих документов дальше делят YANDEX_VISION_CONCURRENCY.
       # Остальные ждут во внутренней очереди, не занимая входящий HTTP.

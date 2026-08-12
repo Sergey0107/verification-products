@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
     KNOWLEDGE_BASE_TIMEOUT_SECONDS: int = 5
     API_GATEWAY_URL: str = "http://api-gateway:8000"
+    # Общий секрет для /compare/callback — api-gateway проверяет его в
+    # middleware (см. INTERNAL_CALLBACK_SECRET там же). Без него подделка
+    # callback'а позволяла переписать результаты сравнения любого анализа.
+    INTERNAL_CALLBACK_SECRET: str = ""
+    INTERNAL_CALLBACK_HEADER: str = "X-Internal-Secret"
     CELERY_BROKER_URL: str = "amqp://guest:guest@rabbitmq:5672//"
     CELERY_RESULT_BACKEND: str = "rpc://"
     # Ответ LLM на chunk сравнения реально занимает 36-172 сек (замерено по

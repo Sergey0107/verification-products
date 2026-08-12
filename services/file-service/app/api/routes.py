@@ -97,8 +97,14 @@ async def upload_batch(
     try:
         Path(settings.TMP_DIR).mkdir(parents=True, exist_ok=True)
 
-        tz_path = f"{settings.TMP_DIR}/{tz_file_id}_{tz_file.filename}"
-        passport_path = f"{settings.TMP_DIR}/{passport_file_id}_{passport_file.filename}"
+        # _safe_download_name обязателен: filename приходит из multipart от
+        # пользователя (api-gateway передаёт его как есть) и раньше
+        # конкатенировался в путь напрямую — имя вида "../../../app/app/main.py"
+        # позволяло записать файл за пределы TMP_DIR и перезаписать код сервиса.
+        tz_path = f"{settings.TMP_DIR}/{tz_file_id}_{_safe_download_name(tz_file.filename)}"
+        passport_path = (
+            f"{settings.TMP_DIR}/{passport_file_id}_{_safe_download_name(passport_file.filename)}"
+        )
 
         async with aiofiles.open(tz_path, "wb") as out:
             while chunk := await tz_file.read(1024 * 1024):
@@ -151,14 +157,19 @@ async def download_file(
     background_tasks: BackgroundTasks,
 ):
     try:
+        # name — query-параметр от клиента. Без санитизации абсолютный путь в
+        # нём ЗАМЕНЯЛ бы базовую директорию целиком (семантика Path.__truediv__),
+        # а "../" выводил бы за её пределы. В preview_file это уже учтено, здесь
+        # раньше не было — приводим к одному поведению.
+        safe_name = _safe_download_name(name)
         downloads_dir = Path(settings.TMP_DIR) / "downloads"
         downloads_dir.mkdir(parents=True, exist_ok=True)
-        target_path = downloads_dir / f"{uuid4()}_{name}"
+        target_path = downloads_dir / f"{uuid4()}_{safe_name}"
         download_file_path(key, str(target_path))
         background_tasks.add_task(target_path.unlink, missing_ok=True)
         return FileResponse(
             path=str(target_path),
-            filename=name,
+            filename=safe_name,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
