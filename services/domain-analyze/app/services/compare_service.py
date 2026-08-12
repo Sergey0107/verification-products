@@ -1602,49 +1602,26 @@ class _LlmProvider(NamedTuple):
     model: str
 
 
-# paddleocr_vl структурирует текст моделью Yandex, поэтому и сравнение для
-# него выполняет модель из Yandex AI Studio — весь анализ идёт по одному стеку.
-_YANDEX_BACKENDS = frozenset({"paddleocr_vl"})
-
-# yandex_vision_ocr: OCR и structuring остаются на Yandex (там своя причина —
-# см. yandex_structurer.py), но САМО сравнение переведено на AI Tunnel —
-# сравнительный тест на реальном документе (насос, 16 характеристик с
-# значениями в обоих документах) показал: Yandex/qwen3-235b дал 0 ложных
-# совпадений за ~11.5 мин; AI Tunnel/gpt-5.6-luna-pro после исправления
-# правила про диапазон/допуск в промпте (см. prompt-registry) дал ИДЕНТИЧНЫЙ
-# результат по всем 16 строкам за ~106 сек — то есть та же точность в разы
-# быстрее. paddleocr_vl не тестировался отдельно, поэтому остаётся на Yandex.
-_AI_TUNNEL_COMPARE_MODEL = "gpt-5.6-luna-pro"
-
-
 def _resolve_llm_provider(extraction_backend: str | None) -> _LlmProvider:
-    backend = (extraction_backend or "").strip().lower()
-    if backend in _YANDEX_BACKENDS:
-        if not settings.YANDEX_API_KEY:
-            # Без ключа Yandex-запрос гарантированно вернёт 401, а сравнение
-            # упадёт целиком. AI Tunnel даёт корректный результат, поэтому
-            # деградируем к нему вместо отказа.
-            logger.warning(
-                "compare: backend=%s requires YANDEX_API_KEY, falling back to default provider",
-                backend,
-                extra={"step": "compare_provider_fallback"},
-            )
-        else:
-            return _LlmProvider(
-                name="yandex_ai_studio",
-                base_url=settings.YANDEX_BASE_URL,
-                api_key=settings.YANDEX_API_KEY,
-                # AI Studio требует полный идентификатор вида
-                # gpt://<folder>/<model>, короткое имя не принимается.
-                model=f"gpt://{settings.YANDEX_FOLDER_ID}/{settings.YANDEX_COMPARE_MODEL}",
-            )
-    if backend == "yandex_vision_ocr":
+    """Сравнение всегда идёт через Yandex AI Studio (qwen3-235b), независимо
+    от backend'а извлечения — единый провайдер для всего сравнения ТЗ↔паспорт.
+    AI Tunnel остаётся только аварийным fallback'ом, если YANDEX_API_KEY не
+    задан (без ключа Yandex-запрос гарантированно вернёт 401, а сравнение
+    упадёт целиком — AI Tunnel даёт корректный результат, поэтому деградируем
+    к нему вместо отказа)."""
+    if settings.YANDEX_API_KEY:
         return _LlmProvider(
-            name="ai_tunnel_gpt56",
-            base_url=settings.OPENROUTER_BASE_URL,
-            api_key=settings.OPENROUTER_API_KEY,
-            model=_AI_TUNNEL_COMPARE_MODEL,
+            name="yandex_ai_studio",
+            base_url=settings.YANDEX_BASE_URL,
+            api_key=settings.YANDEX_API_KEY,
+            # AI Studio требует полный идентификатор вида
+            # gpt://<folder>/<model>, короткое имя не принимается.
+            model=f"gpt://{settings.YANDEX_FOLDER_ID}/{settings.YANDEX_COMPARE_MODEL}",
         )
+    logger.warning(
+        "compare: YANDEX_API_KEY is not set, falling back to AI Tunnel",
+        extra={"step": "compare_provider_fallback"},
+    )
     return _LlmProvider(
         name="ai_tunnel",
         base_url=settings.OPENROUTER_BASE_URL,
