@@ -918,7 +918,8 @@ def _compare_product_pair(
     passport_map = _build_candidates_map(passport_chars, aliases)
     items: list[dict] = []
     for char_key, char_name in _ordered_characteristics(tz_chars, passport_chars, aliases):
-        tz_entry = _primary_entry(tz_map.get(char_key, []))
+        tz_candidates = tz_map.get(char_key, [])
+        tz_entry = _primary_entry(tz_candidates)
         passport_candidates = passport_map.get(char_key, [])
         passport_entry = _primary_entry(passport_candidates)
         items.append(
@@ -927,6 +928,12 @@ def _compare_product_pair(
                 "tz_product_name": tz_product.get("product_name") or product_name,
                 "characteristic": char_name,
                 "tz_value": tz_entry.get("value"),
+                # Характеристика реально упомянута в ТЗ (пусть и без значения —
+                # см. _ordered_characteristics: она также включает имена,
+                # которые есть ТОЛЬКО в паспорте, с tz_value=None). Различаем
+                # эти два случая ниже, где not_found разворачивается в
+                # uncertain только когда характеристика реально есть в ТЗ.
+                "in_tz": bool(tz_candidates),
                 "passport_value": passport_entry.get("value"),
                 "tz_references": tz_entry.get("references", []),
                 "passport_references": passport_entry.get("references", []),
@@ -1267,6 +1274,7 @@ def _resolve_char_name_aliases(
         for name_key, canonical_key in whole_doc_aliases.items():
             aliases.setdefault(name_key, [canonical_key])
 
+    _resolve_alias_chains(aliases)
     _apply_prefix_fallback_aliases(aliases)
 
     logger.info(
@@ -1370,6 +1378,49 @@ def _resolve_char_name_aliases_whole_document(
             for chunk_result in executor.map(_resolve_chunk, name_chunks):
                 aliases.update(chunk_result)
     return aliases
+
+
+def _resolve_alias_chains(aliases: dict[str, list[str]]) -> None:
+    """Схлопывает транзитивные цепочки алиасов на месте: aliases строится по
+    частям (per-model LLM-вызовы, whole-document fallback), и один и тот же
+    normalized_name может оказаться одновременно (а) canonical-ключом для
+    одних имён и (б) source-ключом, отображённым LLM на ДРУГОЙ canonical в
+    отдельном вызове — например {"частота вращения номинальная": ["частота
+    вращения"], "количество оборотов на валу электродвигателя": ["частота
+    вращения номинальная"]}. Без разрешения цепочки второе имя показывает
+    статус под ключом "частота вращения номинальная", а панель документа
+    (которая читает тот же aliases-словарь для canonical_name характеристики
+    ТЗ) резолвит ИМЕННО "частота вращения номинальная" в терминальную
+    "частота вращения" — связь по общему ключу рвётся, и характеристика
+    молча выпадает из счётчиков обеих колонок, даже когда сама строка
+    сравнения существует и содержит найденное значение.
+
+    Каждый canonical_key в списке заменяется на результат обхода цепочки
+    aliases[canonical_key] -> ... до тех пор, пока очередной ключ либо не
+    отсутствует в aliases (сам терминальный), либо не встречен повторно
+    (защита от цикла — маловероятна, но LLM-вывод не гарантирует ацикличность)."""
+
+    def _terminal(key: str, seen: set[str]) -> str:
+        if key in seen:
+            return key
+        seen.add(key)
+        targets = aliases.get(key)
+        if not targets:
+            return key
+        # Берём первый — при неоднозначности (несколько canonical у одного
+        # промежуточного ключа) дальше идти некуда, останавливаемся на нём.
+        next_key = targets[0]
+        if next_key == key:
+            return key
+        return _terminal(next_key, seen)
+
+    for name_key, canonical_keys in list(aliases.items()):
+        resolved: list[str] = []
+        for canonical_key in canonical_keys:
+            terminal = _terminal(canonical_key, {name_key})
+            if terminal not in resolved:
+                resolved.append(terminal)
+        aliases[name_key] = resolved
 
 
 def _apply_prefix_fallback_aliases(aliases: dict[str, list[str]]) -> None:
@@ -1874,7 +1925,20 @@ def compare_json(
             # противоречить показанным пользователю данным. LLM иногда путает
             # "в ТЗ нет конкретного значения" с "в паспорте ничего нет" —
             # разворачиваем такой ответ в "uncertain" (требует проверки).
-            elif comparisons[idx].get("status") == "not_found" and item.get("passport_value"):
+            #
+            # Но только когда характеристика РЕАЛЬНО упомянута в ТЗ (item["in_tz"]):
+            # _ordered_characteristics включает в сравнение и характеристики,
+            # которых в ТЗ нет вовсе (только в паспорте, tz_value=None по другой
+            # причине — там просто нечего сравнивать). Без этой проверки такие
+            # чисто-паспортные характеристики тоже получали бы "uncertain" —
+            # ложно выглядело бы, будто ТЗ их требовало и нужна ручная проверка,
+            # хотя корректный статус для них — как раз not_found (в контексте ТЗ
+            # это действительно "не найдено", т.к. требования не было вовсе).
+            elif (
+                comparisons[idx].get("status") == "not_found"
+                and item.get("passport_value")
+                and item.get("in_tz")
+            ):
                 comparisons[idx]["status"] = "uncertain"
             # LLM иногда пишет note вида «характеристика отсутствует в паспорте»,
             # хотя passport_value/tz_value в этой же строке непустые (взяты из
