@@ -11,6 +11,7 @@ from app.api.compare import router as compare_router
 from app.api.comparison_rows import router as comparison_rows_router
 from app.api.files import router as files_router
 from app.api.health import router as health_router
+from app.api.internal import router as internal_router
 from app.api.manual_characteristics import router as manual_characteristics_router
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
@@ -23,6 +24,7 @@ app.include_router(comparison_rows_router, prefix="/api", tags=["comparison-rows
 app.include_router(manual_characteristics_router, prefix="/api", tags=["manual-characteristics"])
 app.include_router(compare_router, tags=["compare"])
 app.include_router(health_router, tags=["health"])
+app.include_router(internal_router, tags=["internal"])
 
 ALLOWED_PATHS = {
     "/docs",
@@ -33,6 +35,7 @@ ALLOWED_PATHS = {
     "/auth/register",
     "/files/callback",
     "/compare/callback",
+    "/internal/extraction-callback",
     "/health",
     "/file-service/health",
 }
@@ -41,6 +44,7 @@ CSRF_EXEMPT_PATHS = {
     "/auth/register",
     "/files/callback",
     "/compare/callback",
+    "/internal/extraction-callback",
     "/health",
     "/file-service/health",
 }

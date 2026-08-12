@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     # мог узнать, доступен ли paddleocr_vl: сервис требует GPU и поднимается
     # только локально, на сервере опции быть не должно.
     PADDLEOCR_VL_ENABLED: bool = False
+    # Прямой URL к paddleocr-vl-service — используется ТОЛЬКО fallback-
+    # поллингом (poll_stuck_extraction_jobs в tasks.py) для проверки статуса
+    # async-job'ов через GET /jobs/{id}, когда callback от него не дошёл.
+    # Основной путь данных (сам запуск/результат извлечения) всегда идёт
+    # через extraction-service — эта переменная не даёт api-gateway новых
+    # прав вызывать extraction-логику напрямую, только читать job-статус.
+    PADDLEOCR_VL_SERVICE_URL: str = "http://paddleocr-vl-service:8000"
+    # Порог "давно не обновлялся" для fallback-поллинга — с запасом над
+    # интервалом между попытками callback (см. CALLBACK_MAX_ATTEMPTS в
+    # job_queue.py, суммарно там до ~3.5 минут задержек между 6 попытками)
+    # и над обычным временем самой обработки, чтобы не дёргать paddleocr-vl-
+    # service статус-запросами по job'ам, которые просто ещё работают.
+    STUCK_EXTRACTION_JOB_THRESHOLD_SECONDS: int = 600
     KNOWLEDGE_BASE_URL: str = "http://knowledge-base:8000"
     KNOWLEDGE_BASE_TIMEOUT_SECONDS: int = 5
     DOMAIN_ANALYZE_URL: str = "http://domain-analyze:8000"

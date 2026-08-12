@@ -203,7 +203,63 @@ DEFAULT_CANONICAL_ATTRIBUTES = [
         "normalized_name": "напряжение питания",
         "unit": "В",
         "value_type": "number",
-        "synonyms": ["напряжение", "вольтаж"],
+        "synonyms": ["напряжение", "вольтаж", "напряжение электропитания сети"],
+    },
+    # Насосное оборудование — добавлено по итогам разбора реального анализа
+    # (насос Ш80-2,5, см. обсуждение с пользователем): ТЗ и паспорт называли
+    # одни и те же величины разными словами, из-за чего строковое сравнение
+    # находило почти ноль совпадений.
+    {
+        "domain": "technical_compliance",
+        "name": "Подача",
+        "normalized_name": "подача",
+        "unit": "м3/ч",
+        "value_type": "number",
+        "synonyms": ["производительность насоса", "расход", "объёмная подача"],
+    },
+    {
+        "domain": "technical_compliance",
+        "name": "Напор",
+        "normalized_name": "напор",
+        "unit": "м",
+        "value_type": "number",
+        "synonyms": ["давление на выходе", "напор насоса"],
+    },
+    {
+        "domain": "technical_compliance",
+        "name": "Вязкость перекачиваемой жидкости",
+        "normalized_name": "вязкость перекачиваемой жидкости",
+        "unit": "сСт",
+        "value_type": "number",
+        "synonyms": [
+            "кинематическая вязкость перекачиваемого масла",
+            "кинематическая вязкость",
+            "вязкость рабочей жидкости",
+        ],
+    },
+    {
+        "domain": "technical_compliance",
+        "name": "Частота вращения",
+        "normalized_name": "частота вращения",
+        "unit": "об/мин",
+        "value_type": "number",
+        "synonyms": ["скорость вращения вала", "число оборотов"],
+    },
+    {
+        "domain": "technical_compliance",
+        "name": "Масса",
+        "normalized_name": "масса",
+        "unit": "кг",
+        "value_type": "number",
+        "synonyms": ["вес", "масса изделия", "масса агрегата"],
+    },
+    {
+        "domain": "technical_compliance",
+        "name": "Климатическое исполнение",
+        "normalized_name": "климатическое исполнение",
+        "unit": None,
+        "value_type": "string",
+        "synonyms": ["исполнение по ГОСТ 15150-69", "категория размещения"],
     },
 ]
 

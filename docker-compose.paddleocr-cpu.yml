@@ -16,10 +16,25 @@ services:
       - ./env/.env
     environment:
       - OCR_PROVIDER=yandex_vision
-      - YANDEX_MODEL_NAME=${YANDEX_MODEL_NAME:-deepseek-v4-flash}
-      - YANDEX_BASE_URL=${YANDEX_BASE_URL:-https://llm.api.cloud.yandex.net/v1}
-      - YANDEX_MAX_TOKENS=${YANDEX_MAX_TOKENS:-32000}
-      - YANDEX_TIMEOUT_SECONDS=${YANDEX_TIMEOUT_SECONDS:-240}
+      # LLM для structuring (yandex_structurer.py) — по умолчанию AI Tunnel/
+      # gpt-5.6-luna-pro (см. модульный docstring там же про причину смены с
+      # Yandex DeepSeek V4 Flash: систематические ReadTimeout на страницах-
+      # формах без table_cell-структуры).
+      #
+      # НЕ задаём LLM_API_KEY/LLM_BASE_URL здесь через ${OPENROUTER_API_KEY} —
+      # это та же ловушка, что описана в комментарии ниже про CWD/.env: такая
+      # интерполяция читает shell/.env в CWD, НЕ env_file (env/.env), и на
+      # реальном docker compose up резолвится в ПУСТУЮ строку (подтверждено
+      # `docker compose config` — LLM_API_KEY: ""), а не в ключ из env/.env.
+      # Вместо этого yandex_structurer.py сам падает на OPENROUTER_API_KEY/
+      # OPENROUTER_BASE_URL как fallback, если LLM_API_KEY/LLM_BASE_URL не
+      # заданы — а они и так приходят через env_file: ./env/.env выше (тот же
+      # ключ, что domain-analyze/compare_service.py использует для AI Tunnel).
+      # По той же причине YANDEX_API_KEY/YANDEX_FOLDER_ID (для Vision OCR)
+      # тоже нигде не продублированы через environment: — только env_file.
+      - LLM_MODEL=${LLM_MODEL:-gpt-5.6-luna-pro}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-32000}
+      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-180}
       # ${VAR:-default} здесь интерполирует compose CLI из .env в CWD (его нет)
       # или shell-окружения — env/.env он НЕ читает (это делает env_file:
       # выше, но environment: имеет приоритет над ним для одинаковых имён).
@@ -29,12 +44,29 @@ services:
       # ожидания упиралась в consumer_timeout RabbitMQ, брокер рвал канал,
       # Celery доставлял задачу повторно, и она удваивала нагрузку на тот же
       # самый семафор. Подняты с запасом над дефолтом кода (4/2).
-      - YANDEX_CONCURRENCY=${YANDEX_CONCURRENCY:-4}
+      #
+      # 8 (было 4) — официальная квота Yandex AI Studio для синхронной
+      # генерации текста («Квоты и лимиты» → «Генерация текста» → «Количество
+      # одновременных генераций в синхронном режиме») — 10; 8 оставляет запас
+      # на случай параллельного _normalize_variants другого документа на том
+      # же аккаунте. См. также YANDEX_TIMEOUT_SECONDS выше — реальный прогон
+      # показал ReadTimeout на части страниц (deepseek-v4-flash не всегда
+      # укладывается в отведённое время на страницах с крупными таблицами).
+      - YANDEX_CONCURRENCY=${YANDEX_CONCURRENCY:-8}
       - YANDEX_VISION_URL=${YANDEX_VISION_URL:-https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText}
       - YANDEX_VISION_MODEL=${YANDEX_VISION_MODEL:-table}
       - YANDEX_VISION_TIMEOUT_SECONDS=${YANDEX_VISION_TIMEOUT_SECONDS:-60}
       - YANDEX_VISION_RENDER_ZOOM=${YANDEX_VISION_RENDER_ZOOM:-2.0}
       - YANDEX_VISION_CONCURRENCY=${YANDEX_VISION_CONCURRENCY:-3}
+      # Чекпоинт по страницам + очередь job'ов — см. job_queue.py. redis
+      # объявлен в основном docker-compose.yml, доступен по имени контейнера
+      # в той же default-сети.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - EXTRACTION_CALLBACK_URL=${EXTRACTION_CALLBACK_URL:-http://api-gateway:8000/internal/extraction-callback}
+      # Сколько документов обрабатываются одновременно ВНУТРИ сервиса —
+      # страницы этих документов дальше делят YANDEX_VISION_CONCURRENCY.
+      # Остальные ждут во внутренней очереди, не занимая входящий HTTP.
+      - MAX_CONCURRENT_DOCUMENTS=${MAX_CONCURRENT_DOCUMENTS:-2}
     volumes:
       - paddleocr-crops-data:/data/crops
     # Явной секции networks нет — сервис попадает в default bridge-сеть

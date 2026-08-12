@@ -32,13 +32,22 @@ class ComparisonRow(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    analysis_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     # Изделие паспорта, к которому относится эта строка сравнения — заполняется,
     # когда паспорт содержит несколько моделей/исполнений одного изделия (см.
     # compare_service._build_comparison_items: product_name уже формировался
     # LLM-сравнением, но раньше терялся при сохранении в эту таблицу). NULL —
     # паспорт с одной моделью, разделение по изделиям не применимо.
     product_name = Column(String, nullable=True)
+    # Изделие ТЗ, к которому относится эта строка — отдельно от product_name
+    # (изделие паспорта), т.к. когда паспорт описывает несколько моделей на
+    # одну модель ТЗ, их названия почти никогда не совпадают буквально
+    # ("Ш80-2,5-37,5/2,5" в паспорте vs "НШ-80-2,5-37,5/2,5" в ТЗ). Нужно,
+    # чтобы фронтенд мог связать строку сравнения с характеристикой ТЗ по
+    # правильному ключу (characteristicKey в pdf-analyzer) и показать статус
+    # сопоставления в панели «Техническое задание». NULL — старые строки,
+    # посчитанные до появления поля.
+    tz_product_name = Column(String, nullable=True)
     # False — строка относится к модели каталога, которую пользователь НЕ
     # запрашивал: сравнение считает все модели паспорта, а UI по умолчанию
     # показывает только целевую (плюс общие характеристики). NULL/True —
@@ -82,7 +91,7 @@ class UserEdit(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    comparison_row_id = Column(UUID(as_uuid=True), nullable=False)
+    comparison_row_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     user_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.user.id", ondelete="SET NULL"),
@@ -133,7 +142,7 @@ class ManualCharacteristic(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    analysis_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     document_type = Column(String, nullable=False)  # 'tz' | 'passport'
     # NULL для новой характеристики ТЗ (кейс А). Заполнено ID строки
     # TzCharacteristicReview/ComparisonRow, к которой привязана ручная аннотация

@@ -26,6 +26,13 @@ class ExtractionJob(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime, nullable=True)
+    # job_id на стороне paddleocr-vl-service для async-режима (backend
+    # yandex_vision_ocr) — сопоставляет входящий callback на
+    # /internal/extraction-callback с нужной записью, и позволяет
+    # fallback-поллингу (finalize_stuck_extractions) спросить статус job'а
+    # напрямую через GET {paddleocr}/jobs/{external_job_id}, если callback
+    # потерялся. NULL для всех остальных backend'ов (синхронные, без job'ов).
+    external_job_id = Column(String, nullable=True, index=True)
 
 
 __all__ = ["ExtractionJob"]

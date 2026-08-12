@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, NamedTuple
 
 import httpx
@@ -179,20 +180,55 @@ def _normalize_products(data: dict) -> list[dict]:
     return normalized
 
 
-def _ordered_products(tz_products: list[dict], passport_products: list[dict]) -> list[dict]:
-    ordered = []
-    seen = set()
-    for item in tz_products:
-        name = item.get("product_name") or "Неизвестное изделие"
-        if name not in seen:
-            ordered.append(item)
-            seen.add(name)
-    for item in passport_products:
-        name = item.get("product_name") or "Неизвестное изделие"
-        if name not in seen:
-            ordered.append(item)
-            seen.add(name)
-    return ordered
+def _pair_products_by_model(
+    tz_products: list[dict], passport_products: list[dict]
+) -> list[tuple[dict | None, dict | None]]:
+    """Пары (ТЗ-продукт, паспорт-продукт) для сравнения N:N изделий.
+
+    ДО этой функции пары строились по точному совпадению product_name
+    (_ordered_products) — но ТЗ и паспорт почти всегда называют одну и ту же
+    модель по-разному ("Unipump Насос шламовый USP4A 100-15-9" в ТЗ vs
+    "Шламовый насос USP4A 100-15-9" в паспорте): точные имена никогда не
+    совпадали, и характеристики этой модели с двух сторон сравнивались как
+    РАЗНЫЕ изделия — отсюда "Мощность" из паспорта и "Мощность двигателя" из
+    ТЗ для одной и той же модели никогда не оказывались в одной строке
+    сравнения, даже после устранения строкового расхождения имён
+    характеристик (aliases). Здесь пары строятся по _models_match — тому же
+    числовому ядру типоразмера/подстроке имени, что уже используется для
+    _mark_target_model_items — так что сопоставление моделей единообразно во
+    всём файле.
+
+    Жадный алгоритм: каждый ТЗ-продукт получает лучший ещё не занятый
+    паспорт-продукт по _models_match (первый подходящий — модели документа
+    почти всегда однозначно различимы по числовому ядру, конкуренции за одну
+    и ту же пару обычно нет). Непарные продукты с обеих сторон идут отдельными
+    строками (None с другой стороны) — как раньше для действительно уникальных
+    моделей."""
+    unmatched_passport = list(passport_products)
+    pairs: list[tuple[dict | None, dict | None]] = []
+
+    for tz_product in tz_products:
+        tz_model = tz_product.get("product_model") or tz_product.get("product_name")
+        match_index = next(
+            (
+                index
+                for index, passport_product in enumerate(unmatched_passport)
+                if _models_match(
+                    tz_model,
+                    passport_product.get("product_model") or passport_product.get("product_name"),
+                )
+            ),
+            None,
+        )
+        if match_index is not None:
+            pairs.append((tz_product, unmatched_passport.pop(match_index)))
+        else:
+            pairs.append((tz_product, None))
+
+    for passport_product in unmatched_passport:
+        pairs.append((None, passport_product))
+
+    return pairs
 
 
 # Слова, которые документы добавляют к названию характеристики, не меняя её
@@ -238,7 +274,39 @@ def _normalize_char_name(name: Any) -> str:
     return text
 
 
-def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
+def _char_name_key(name: Any, aliases: dict[str, list[str]] | None) -> str:
+    """Основной (первый) ключ сопоставления — используется там, где нужен
+    ровно один ключ на имя (порядок строк сравнения, group-by в UI). Для
+    поиска ВСЕХ кандидатов см. _char_name_keys ниже: одно имя паспорта может
+    относиться сразу к нескольким ТЗ-требованиям (диапазон "от X до Y" в
+    паспорте отвечает и на "минимальное значение", и на "максимальное" в
+    ТЗ), и это не то же самое, что "не уверен, к чему из двух отнести"."""
+    return _char_name_keys(name, aliases)[0]
+
+
+def _char_name_keys(name: Any, aliases: dict[str, list[str]] | None) -> list[str]:
+    """Все ключи сопоставления для имени: сперва пробуем семантические алиасы
+    (см. _resolve_char_name_aliases), иначе — строковая нормализация как
+    единственный ключ. Алиасы покрывают только то, что реально встретилось в
+    документах и что LLM смогла сгруппировать; всё остальное продолжает
+    работать как раньше.
+
+    Список, а не одно значение: наивный dict[str, str] не может выразить
+    «паспортное имя относится сразу к двум разным ТЗ-требованиям» — второе
+    совпадение просто перезаписывало бы первое. С list[str] запись паспорта
+    дублируется под каждым canonical_key, к которому она была отнесена (см.
+    _build_char_map/_build_candidates_map)."""
+    normalized = _normalize_char_name(name)
+    if aliases:
+        aliased = aliases.get(normalized)
+        if aliased:
+            return list(aliased)
+    return [normalized]
+
+
+def _build_char_map(
+    products: list[dict], aliases: dict[str, list[str]] | None = None
+) -> dict[str, dict[str, list[dict]]]:
     """Характеристика -> СПИСОК всех встреченных записей {value, references}, а не
     одна (последняя). Документ может упоминать одну характеристику несколько раз
     с разными (в т.ч. противоречивыми) значениями — например разные рабочие точки
@@ -246,10 +314,15 @@ def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
     перезаписывалось. Первый элемент списка остаётся "основным" для мест кода,
     которые пока умеют работать только с одним значением (LLM comparison prompt).
 
-    Ключ — нормализованное имя (_normalize_char_name): ТЗ и паспорт называют
-    одну характеристику по-разному, и точное совпадение находило пару лишь в
-    единичных случаях. Исходное написание сохраняется в поле "name", чтобы в
-    UI и промпте характеристика называлась так же, как в документе."""
+    Ключ — нормализованное имя (_normalize_char_name), при наличии aliases —
+    семантический канонический ключ поверх него (см. _char_name_keys): ТЗ и
+    паспорт называют одну характеристику по-разному, и точное совпадение
+    находило пару лишь в единичных случаях. Если имени соответствует
+    НЕСКОЛЬКО ключей (паспортный диапазон отвечает и на "минимальное", и на
+    "максимальное" ТЗ-требование), запись дублируется под каждым — иначе
+    она была бы видна только одной из двух ТЗ-строк. Исходное написание
+    сохраняется в поле "name", чтобы в UI и промпте характеристика
+    называлась так же, как в документе."""
     result: dict[str, dict[str, list[dict]]] = {}
     for product in products:
         product_name = product.get("product_name") or "Неизвестное изделие"
@@ -258,32 +331,41 @@ def _build_char_map(products: list[dict]) -> dict[str, dict[str, list[dict]]]:
             name = item.get("name")
             if not name:
                 continue
-            result[product_name].setdefault(_normalize_char_name(name), []).append(
-                {
-                    "name": name,
-                    "value": item.get("value"),
-                    "references": item.get("references", []),
-                }
-            )
+            entry = {
+                "name": name,
+                "value": item.get("value"),
+                "references": item.get("references", []),
+            }
+            for key in _char_name_keys(name, aliases):
+                result[product_name].setdefault(key, []).append(entry)
     return result
 
 
 def _ordered_characteristics(
-    tz_chars: list[dict], passport_chars: list[dict]
+    tz_chars: list[dict],
+    passport_chars: list[dict],
+    aliases: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, str]]:
     """Пары (ключ сопоставления, отображаемое имя) в порядке ТЗ, затем паспорта.
 
-    Ключ нормализован, поэтому «Подача при напоре 10 м» из ТЗ и «Подача
-    (расход) при напоре 10 м» из паспорта дают одну строку сравнения. Показываем
-    название так, как оно записано в ТЗ (там формулировка требования), а для
-    характеристик, которых в ТЗ нет, — как в паспорте."""
+    Ключ нормализован (и при наличии aliases — семантически сгруппирован),
+    поэтому «Подача при напоре 10 м» из ТЗ и «Подача (расход) при напоре 10 м»
+    из паспорта дают одну строку сравнения. Показываем название так, как оно
+    записано в ТЗ (там формулировка требования), а для
+    характеристик, которых в ТЗ нет, — как в паспорте.
+
+    Один ключ на строку (первый из _char_name_keys, если их несколько) —
+    строк сравнения по-прежнему ровно столько же, сколько уникальных имён;
+    "многие ключи" используются только чтобы найти этой строке ВСЕ
+    подходящие записи паспорта (см. _build_char_map/_build_candidates_map),
+    а не чтобы размножить саму строку."""
     ordered: list[tuple[str, str]] = []
     seen: set[str] = set()
     for item in list(tz_chars) + list(passport_chars):
         name = item.get("name")
         if not name:
             continue
-        key = _normalize_char_name(name)
+        key = _char_name_key(name, aliases)
         if key in seen:
             continue
         ordered.append((key, name))
@@ -647,9 +729,13 @@ def _build_evidence_payload(
     }
 
 
-def _build_candidates_map(chars: list[dict]) -> dict[str, list[dict]]:
-    """Группирует характеристики по нормализованному имени в СПИСОК всех
-    встреченных записей (не одну последнюю) — см. docstring _build_char_map."""
+def _build_candidates_map(
+    chars: list[dict], aliases: dict[str, list[str]] | None = None
+) -> dict[str, list[dict]]:
+    """Группирует характеристики по нормализованному (при наличии aliases —
+    семантическому) имени в СПИСОК всех встреченных записей (не одну
+    последнюю) — см. docstring _build_char_map. Имя с несколькими ключами
+    дублируется под каждым (см. _char_name_keys)."""
     result: dict[str, list[dict]] = {}
     for c in chars:
         if not isinstance(c, dict):
@@ -657,7 +743,8 @@ def _build_candidates_map(chars: list[dict]) -> dict[str, list[dict]]:
         name = c.get("name")
         if not name:
             continue
-        result.setdefault(_normalize_char_name(name), []).append(c)
+        for key in _char_name_keys(name, aliases):
+            result.setdefault(key, []).append(c)
     return result
 
 
@@ -665,7 +752,11 @@ def _primary_entry(candidates: list[dict]) -> dict:
     return candidates[0] if candidates else {}
 
 
-def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict]:
+def _compare_product_pair(
+    tz_product: dict,
+    passport_product: dict,
+    aliases: dict[str, list[str]] | None = None,
+) -> list[dict]:
     """Сравнивает ОДНО изделие ТЗ с ОДНИМ изделием паспорта, объединяя
     характеристики по имени. Используется, когда с каждой стороны ровно одно
     изделие — тогда название изделия не важно (в паспорте оно часто пустое),
@@ -677,16 +768,17 @@ def _compare_product_pair(tz_product: dict, passport_product: dict) -> list[dict
     )
     tz_chars = tz_product.get("characteristics", []) or []
     passport_chars = passport_product.get("characteristics", []) or []
-    tz_map = _build_candidates_map(tz_chars)
-    passport_map = _build_candidates_map(passport_chars)
+    tz_map = _build_candidates_map(tz_chars, aliases)
+    passport_map = _build_candidates_map(passport_chars, aliases)
     items: list[dict] = []
-    for char_key, char_name in _ordered_characteristics(tz_chars, passport_chars):
+    for char_key, char_name in _ordered_characteristics(tz_chars, passport_chars, aliases):
         tz_entry = _primary_entry(tz_map.get(char_key, []))
         passport_candidates = passport_map.get(char_key, [])
         passport_entry = _primary_entry(passport_candidates)
         items.append(
             {
                 "product_name": product_name,
+                "tz_product_name": tz_product.get("product_name") or product_name,
                 "characteristic": char_name,
                 "tz_value": tz_entry.get("value"),
                 "passport_value": passport_entry.get("value"),
@@ -746,7 +838,495 @@ def _mark_target_model_items(
     return items
 
 
-def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
+def _build_kb_synonyms_appendix() -> str:
+    """Готовые синонимы из Knowledge Base (canonical_attributes.synonyms) как
+    подсказка для _resolve_char_name_aliases — те же данные, что уже
+    используются в _build_kb_prompt_appendix для сравнения, но здесь
+    подмешиваются РАНЬШЕ, на этапе группировки имён, а не после построения
+    пар. Список короткий (десятки записей), поэтому передаём целиком, без
+    привязки к конкретным items текущего анализа."""
+    try:
+        attributes = list_canonical_attributes()
+    except Exception:
+        logger.warning(
+            "build_kb_synonyms_appendix: failed to fetch canonical attributes",
+            exc_info=True,
+        )
+        return ""
+    if not attributes:
+        return ""
+    lines = [
+        "\n\nИзвестные канонические характеристики и их синонимы (используй как "
+        "дополнительную подсказку, но не ограничивайся только ими):"
+    ]
+    for item in attributes[:200]:
+        synonyms = ", ".join(str(v) for v in (item.get("synonyms") or [])[:8])
+        name = item.get("name")
+        if not name:
+            continue
+        line = f"- {name}"
+        if synonyms:
+            line += f" (синонимы: {synonyms})"
+        lines.append(line)
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
+_CHAR_ALIAS_SYSTEM_PROMPT = """Ты помогаешь сопоставить названия технических характеристик
+из технического задания (ТЗ) и из паспорта/руководства по эксплуатации одного и того же
+изделия. Разные документы часто называют одну и ту же физическую величину разными словами
+(например «Вязкость перекачиваемой жидкости» и «Кинематическая вязкость перекачиваемого
+масла» — одно и то же; «Напряжение питания» и «Напряжение электропитания сети» — одно и то
+же; «Производительность» и «Подача» для насоса — одно и то же).
+
+Тебе дан список названий характеристик ИЗ ТЗ (требования к изделию) и отдельно список названий
+характеристик ИЗ ПАСПОРТА этой же конкретной модели изделия. Для КАЖДОГО названия из ТЗ найди
+ВСЕ названия из паспорта, обозначающие ТУ ЖЕ физическую величину (может быть 0, 1 или несколько —
+например если паспорт даёт минимальное/максимальное значение отдельными строками, а в ТЗ они
+объединены одним требованием на диапазон, или наоборот). Разные величины (даже близкие —
+например «Максимальный напор» и «Номинальный напор», разные рабочие точки вроде «напор 10 м» и
+«напор 15 м») в один match не объединяй.
+
+ОБРАТНЫЙ случай отдельно: если ПАСПОРТ даёт величину ОДНОЙ строкой-диапазоном («Рабочая
+температура: от +1 до +25°C»), а ТЗ требует её же ДВУМЯ отдельными строками («Минимальная
+температура: +1°C» и «Максимальная температура: +25°C») — верни ЭТО ЖЕ паспортное название в
+passport_names для ОБОИХ tz_name («Минимальная...» и «Максимальная...»), не только для одного
+из них. Одно название паспорта не «занято» — оно может законно входить в match нескольких
+разных названий ТЗ одновременно, если каждое из них — часть того же диапазона/факта.
+
+ВАЖНО про короткие/общие названия: один документ часто называет характеристику общим словом
+(«Мощность», «Напор», «Расход», «Напряжение»), а другой — тем же словом с уточняющим
+существительным без изменения смысла величины («Мощность двигателя», «Напор насоса», «Расход
+жидкости», «Напряжение питания», «Напряжение электродвигателя», «Напряжение сети») — это ОДНА
+И ТА ЖЕ характеристика, группируй их вместе. Особенно для ЭЛЕКТРИЧЕСКИХ параметров питания
+(напряжение, ток, частота, число фаз) — у изделия почти всегда ОДНА точка подключения к
+электросети, поэтому «Напряжение питания», «Напряжение сети», «Напряжение электродвигателя» и
+просто «Напряжение» почти наверняка одна и та же величина (сетевое напряжение, на которое
+рассчитан весь агрегат/электродвигатель), даже если формулировки называют разные узлы —
+разделяй их только при явном признаке нескольких НЕЗАВИСИМЫХ источников питания в одном
+изделии (например отдельно управляющая электроника на 24В и силовой двигатель на 380В).
+
+Отличай такое уточнение (не меняет физическую величину) от модификатора, который меняет её
+(максимальный/минимальный/номинальный/расчётный, разные рабочие точки, или разные МЕХАНИЧЕСКИЕ
+узлы с независимой мощностью/производительностью — «мощность двигателя» вс. «мощность насоса»
+у агрегата, где двигатель и насос имеют разный КПД и разную мощность на валу, поэтому это
+разные числа, не просто разные слова для одного) — такие модификаторы обозначают разные
+величины и группировать их нельзя.
+
+Не объединяй характеристики, если не уверен, что это одна и та же величина — ложное
+объединение хуже, чем пропущенное совпадение. Но не будь излишне осторожен с очевидными
+случаями выше (короткое общее имя vs то же имя с уточнением, не меняющим величину) — это
+самый частый и самый безопасный тип совпадения, и его пропуск — типичная ошибка.
+
+Верни JSON: {"matches": [{"tz_name": "...", "passport_names": ["...", "..."]}, ...]}.
+Ровно один объект на каждое входное название из ТЗ (в том же порядке, что дан список ТЗ).
+passport_names — список найденных названий из паспорта (пустой список [], если совпадений
+нет — не пропускай ТЗ-название целиком)."""
+
+# Fallback-версия промпта для _resolve_char_name_aliases_whole_document: та
+# же логика группировки синонимов, но без разделения на "список ТЗ" и
+# "список паспорта" — используется только для ТЗ-продуктов, для которых
+# _models_match не нашла паспорт-модель (per-model explicit matching
+# неприменим, см. docstring _resolve_char_name_aliases).
+_CHAR_ALIAS_WHOLE_DOC_SYSTEM_PROMPT = """Ты помогаешь сопоставить названия технических
+характеристик из технического задания (ТЗ) и из паспорта/руководства по эксплуатации одного и
+того же изделия. Разные документы часто называют одну и ту же физическую величину разными
+словами (например «Вязкость перекачиваемой жидкости» и «Кинематическая вязкость перекачиваемого
+масла» — одно и то же; «Мощность» и «Мощность двигателя» — одно и то же).
+
+Тебе дан список названий характеристик (каждое — отдельная строка из ТЗ или паспорта, могут
+повторяться). Сгруппируй их по физическому смыслу: названия, обозначающие ОДНУ И ТУ ЖЕ
+величину, получают один и тот же canonical_key (короткая нормализованная строка на русском
+языке, нижний регистр, без единиц измерения). Названия, обозначающие РАЗНЫЕ величины (даже
+близкие — например «Максимальный напор» и «Номинальный напор», или значения при разных рабочих
+точках вроде «напор 10 м» и «напор 15 м»), НЕ группируй вместе — оставляй им разные
+canonical_key. Не объединяй характеристики, если не уверен, что это одна и та же величина.
+
+Верни JSON: {"groups": [{"canonical_key": "...", "names": ["...", "..."]}, ...]}.
+Каждое входное название должно попасть ровно в одну группу. Названия, для которых нет
+явного синонима, всё равно образуют собственную группу из одного имени."""
+
+# Размер чанка для группировки имён характеристик (см. _resolve_char_name_aliases).
+# Меньше, чем COMPARE_CHUNK_SIZE (для самого сравнения) — там LLM оценивает
+# готовые пары значений, здесь ей нужно удерживать в внимании весь список
+# сразу, чтобы заметить совпадения между удалёнными друг от друга именами;
+# с большими списками (300+) она почти перестаёт группировать вообще (см.
+# docstring ниже).
+_CHAR_ALIAS_CHUNK_SIZE = 40
+
+
+def _resolve_char_name_aliases(
+    tz_products: list[dict],
+    passport_products: list[dict],
+    extraction_backend: str | None = None,
+) -> dict[str, list[str]]:
+    """Семантическая группировка названий характеристик ТЗ/паспорта в один
+    canonical_key через LLM — до построения _build_char_map. Строковая
+    нормализация (_normalize_char_name) не понимает синонимы («Вязкость
+    перекачиваемой жидкости» и «Кинематическая вязкость перекачиваемого
+    масла» физически одно и то же, но как строки не совпадают), из-за чего
+    такие пары никогда не попадали в сравнение, даже когда значения есть в
+    обоих документах.
+
+    Раньше это был ОДИН LLM-запрос на весь документ (даже разбитый на
+    чанки по алфавиту) — и модель группировала почти никак: реальные случаи
+    на документах — "Мощность"/"Мощность двигателя", "Нормальный напор"/
+    "Напор насоса" не находили пару, хотя явно одна и та же величина (см.
+    обсуждение с пользователем). Проблема — абстрактная группировка списка
+    из сотен несвязанных строк без контекста, какая с какой стороны
+    документа; здесь вместо этого делаем per-model EXPLICIT MATCHING: для
+    каждой пары (ТЗ-модель, её паспорт-модели по _models_match) — отдельный
+    запрос с ДВУМЯ явными списками (что в ТЗ / что в паспорте ЭТОЙ модели) и
+    прямой задачей "для каждого имени из ТЗ найди все подходящие из
+    паспорта" — контекст на порядок компактнее и точнее, к тому же
+    естественно поддерживает 1-ко-многим (см. _CHAR_ALIAS_SYSTEM_PROMPT):
+    если паспорт даёт "Минимальная/Максимальная температура" отдельными
+    строками на одно ТЗ-требование "Рабочая температура" — оба попадут в
+    один canonical_key, и уже существующий passport_value_candidates покажет
+    их вложенным списком, ничего доп. переделывать не нужно.
+
+    Возвращает {normalized_name: [canonical_key, ...]} — обычно один
+    элемент, используется в _char_name_keys/_build_char_map. Список, а не
+    одно значение: паспортное имя может законно относиться сразу к
+    НЕСКОЛЬКИМ ТЗ-требованиям (диапазон "от X до Y" отвечает и на
+    "минимальное", и на "максимальное") — простой dict[str, str] потерял
+    бы второе совпадение при перезаписи первого."""
+    aliases: dict[str, list[str]] = {}
+
+    # Пары "ТЗ-модель -> её паспорт-модели" через уже существующий
+    # _models_match (числовое ядро типоразмера) — та же логика, что строит
+    # пары продуктов в _build_comparison_items (_pair_products_by_model), но
+    # здесь идём от каждой ТЗ-модели ко ВСЕМ подходящим паспорт-моделям (не
+    # 1:1) — паспорт мог не разложить характеристики по вариантам, тогда
+    # relevant-паспорт-имена размазаны по нескольким продуктам с тем же
+    # числовым ядром.
+    #
+    # Если у ТЗ-продукта нет числового совпадения (напр. ТЗ называет изделие
+    # обозначением заказчика "НП-1" без типоразмера, а паспорт — маркой
+    # производителя "КМХ (В 6,45) 50-50..." — коды физически никак не
+    # пересекаются, но это ОДНО И ТО ЖЕ изделие, просто у сторон разные
+    # системы именования) и ТЗ-продуктов немного (типичная ветка "1 ТЗ : N
+    # паспорт" в _build_comparison_items уже сравнивает такой ТЗ-продукт со
+    # ВСЕМИ паспорт-продуктами без разбора кода) — берём тоже ВСЕ паспорт-
+    # продукты кандидатами, а не молча падаем в слабый групповой fallback
+    # ниже (реальный случай, где это сломало сопоставление: ТЗ="НП-1" без
+    # product_model, паспорт из двух КМХ-моделей — model_pairs было бы
+    # пустым, и даже точное "Мощность"/"Мощность двигателя" не находились).
+    model_pairs: list[tuple[dict, list[dict]]] = []
+    unmatched_tz_products: list[dict] = []
+    for tz_product in tz_products:
+        tz_model = tz_product.get("product_model") or tz_product.get("product_name")
+        matched_passport = [
+            pp
+            for pp in passport_products
+            if _models_match(tz_model, pp.get("product_model") or pp.get("product_name"))
+        ]
+        if not matched_passport and len(tz_products) <= 3 and passport_products:
+            matched_passport = list(passport_products)
+        if matched_passport:
+            model_pairs.append((tz_product, matched_passport))
+        else:
+            unmatched_tz_products.append(tz_product)
+
+    provider = _resolve_llm_provider(extraction_backend)
+    headers = {
+        "Authorization": f"Bearer {provider.api_key}",
+        "Content-Type": "application/json",
+    }
+    system_message = _CHAR_ALIAS_SYSTEM_PROMPT + _build_kb_synonyms_appendix()
+
+    def _dedup_names(products: list[dict]) -> list[str]:
+        seen: set[str] = set()
+        names: list[str] = []
+        for product in products:
+            for item in product.get("characteristics", []):
+                name = item.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                normalized = _normalize_char_name(name)
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                names.append(name)
+        return names
+
+    def _resolve_pair(tz_product: dict, matched_passport: list[dict]) -> dict[str, list[str]]:
+        tz_names = _dedup_names([tz_product])
+        passport_names = _dedup_names(matched_passport)
+        if not tz_names or not passport_names:
+            return {}
+        payload = {
+            "model": provider.model,
+            "messages": [
+                {"role": "system", "content": system_message},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"tz_names": tz_names, "passport_names": passport_names},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{provider.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            parsed = _extract_json(content)
+        except Exception:
+            logger.warning(
+                "resolve_char_name_aliases: LLM call failed for a model pair, skipping it",
+                exc_info=True,
+                extra={"step": "compare_char_aliases_error"},
+            )
+            return {}
+
+        matches = parsed.get("matches") if isinstance(parsed, dict) else None
+        if not isinstance(matches, list):
+            logger.warning(
+                "resolve_char_name_aliases: unexpected response shape for a model pair, ignoring",
+                extra={"step": "compare_char_aliases_bad_shape"},
+            )
+            return {}
+
+        # Многие-к-одному в обе стороны: одно паспортное имя (диапазон
+        # "от X до Y") законно матчится сразу к нескольким tz_name ("мин" и
+        # "макс" отдельными строками) — добавляем canonical_key в список
+        # вместо перезаписи, иначе второе совпадение стирало бы первое.
+        pair_aliases: dict[str, list[str]] = {}
+
+        def _add_alias(name_key: str, canonical_key: str) -> None:
+            keys = pair_aliases.setdefault(name_key, [])
+            if canonical_key not in keys:
+                keys.append(canonical_key)
+
+        for match in matches:
+            if not isinstance(match, dict):
+                continue
+            tz_name = match.get("tz_name")
+            passport_matched = match.get("passport_names")
+            if not isinstance(tz_name, str) or not tz_name.strip():
+                continue
+            if not isinstance(passport_matched, list) or not passport_matched:
+                continue
+            canonical_key = _normalize_char_name(tz_name)
+            _add_alias(canonical_key, canonical_key)
+            for passport_name in passport_matched:
+                if not isinstance(passport_name, str) or not passport_name.strip():
+                    continue
+                _add_alias(_normalize_char_name(passport_name), canonical_key)
+        return pair_aliases
+
+    started_at = time.monotonic()
+    if model_pairs:
+        # Модели независимы — тот же паттерн параллелизации, что уже
+        # используется для чанков самого сравнения (compare_json) — потоки,
+        # т.к. каждый вызов — блокирующий HTTP-запрос.
+        with ThreadPoolExecutor(max_workers=min(8, len(model_pairs))) as executor:
+            for pair_aliases in executor.map(lambda pair: _resolve_pair(*pair), model_pairs):
+                for name_key, canonical_keys in pair_aliases.items():
+                    existing = aliases.setdefault(name_key, [])
+                    for key in canonical_keys:
+                        if key not in existing:
+                            existing.append(key)
+
+    if unmatched_tz_products:
+        # Fallback на старый алгоритм (весь документ одним чанкованным
+        # списком) — только для того, что per-model подход не покрыл. Свой
+        # промпт (групповой формат, а не explicit tz/passport matching) —
+        # каждое имя строго в одной группе, поэтому здесь всегда список из
+        # одного элемента.
+        whole_doc_system_message = (
+            _CHAR_ALIAS_WHOLE_DOC_SYSTEM_PROMPT + _build_kb_synonyms_appendix()
+        )
+        whole_doc_aliases = _resolve_char_name_aliases_whole_document(
+            unmatched_tz_products, passport_products, provider, headers, whole_doc_system_message
+        )
+        for name_key, canonical_key in whole_doc_aliases.items():
+            aliases.setdefault(name_key, [canonical_key])
+
+    _apply_prefix_fallback_aliases(aliases)
+
+    logger.info(
+        "resolve_char_name_aliases: %d model pair(s), %d unmatched TZ product(s), "
+        "%d aliases resolved in %.2fs",
+        len(model_pairs), len(unmatched_tz_products),
+        len({key for keys in aliases.values() for key in keys}),
+        time.monotonic() - started_at,
+        extra={"step": "compare_char_aliases_response"},
+    )
+    return aliases
+
+
+def _resolve_char_name_aliases_whole_document(
+    tz_products: list[dict],
+    passport_products: list[dict],
+    provider: "_LlmProvider",
+    headers: dict[str, str],
+    system_message: str,
+) -> dict[str, str]:
+    """Fallback-путь для _resolve_char_name_aliases: та же группировка одним
+    большим списком имён документа, что использовалась раньше — применяется
+    только к ТЗ-продуктам, для которых не нашлось модели-пары в паспорте
+    (_models_match), поэтому per-model explicit matching неприменим."""
+    raw_names: list[str] = []
+    seen_normalized: set[str] = set()
+    for product in list(tz_products) + list(passport_products):
+        for item in product.get("characteristics", []):
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            normalized = _normalize_char_name(name)
+            if normalized in seen_normalized:
+                continue
+            seen_normalized.add(normalized)
+            raw_names.append(name)
+
+    if len(raw_names) < 2:
+        return {}
+
+    sorted_names = sorted(raw_names, key=lambda n: _normalize_char_name(n))
+    chunk_size = _CHAR_ALIAS_CHUNK_SIZE
+    name_chunks = [
+        sorted_names[i : i + chunk_size] for i in range(0, len(sorted_names), chunk_size)
+    ]
+
+    def _resolve_chunk(chunk: list[str]) -> dict[str, str]:
+        payload = {
+            "model": provider.model,
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": json.dumps({"names": chunk}, ensure_ascii=False)},
+            ],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{provider.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            parsed = _extract_json(content)
+        except Exception:
+            logger.warning(
+                "resolve_char_name_aliases_whole_document: LLM call failed for a chunk, skipping",
+                exc_info=True,
+                extra={"step": "compare_char_aliases_error"},
+            )
+            return {}
+
+        groups = parsed.get("groups") if isinstance(parsed, dict) else None
+        if not isinstance(groups, list):
+            return {}
+        chunk_aliases: dict[str, str] = {}
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            canonical_key = group.get("canonical_key")
+            names = group.get("names")
+            if not isinstance(canonical_key, str) or not canonical_key.strip():
+                continue
+            if not isinstance(names, list):
+                continue
+            canonical_key = canonical_key.strip().lower()
+            for name in names:
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                chunk_aliases[_normalize_char_name(name)] = canonical_key
+        return chunk_aliases
+
+    aliases: dict[str, str] = {}
+    if len(name_chunks) == 1:
+        aliases.update(_resolve_chunk(name_chunks[0]))
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(name_chunks))) as executor:
+            for chunk_result in executor.map(_resolve_chunk, name_chunks):
+                aliases.update(chunk_result)
+    return aliases
+
+
+def _apply_prefix_fallback_aliases(aliases: dict[str, list[str]]) -> None:
+    """Детерминированная подстраховка поверх LLM-группировки: LLM иногда
+    оставляет короткое общее имя («мощность») и то же имя с уточняющим
+    существительным («мощность двигателя») в разных группах, хотя это одна
+    и та же величина — самый частый и при этом самый безопасный тип
+    совпадения (см. обсуждение с пользователем: реальный случай на
+    документе с насосом, где такая пара НЕ сгруппировалась и потеряла
+    совпадение). Правило узкое специально: объединяет normalized_key A и B,
+    только если один — префикс другого ПО ГРАНИЦЕ СЛОВА (не буквенная
+    подстрока — иначе "напор" слился бы с "наработка"), и это ЕДИНСТВЕННЫЙ
+    такой кандидат для A среди всех ключей (если для "мощность" есть и
+    "мощность двигателя", и "мощность насоса" — они формально разные узлы
+    одного изделия, неоднозначность, объединять нельзя — оставляем решение
+    LLM). Мутирует aliases на месте, дополняя (не заменяя) то, что вернула
+    модель — не понижает уверенность LLM-группировки, только добивает
+    случаи, которые она пропустила."""
+    keys = set(aliases.keys())
+    for key in list(keys):
+        # Уже сгруппирован LLM с чем-то другим (или относится к нескольким
+        # группам сразу) — доверяем её решению, не переопределяем.
+        if aliases.get(key) != [key]:
+            continue
+        candidates = [
+            other
+            for other in keys
+            if other != key and other.startswith(key + " ")
+        ]
+        if len(candidates) != 1:
+            continue
+        other = candidates[0]
+        # Аналогично: не трогаем, если "other" уже осмысленно сгруппирован
+        # LLM с чем-то третьим — тогда неясно, входит ли туда и наш "key".
+        if aliases.get(other) != [other]:
+            continue
+        aliases[other] = [key]
+
+
+def _build_comparison_items_with_aliases(
+    tz_data: dict, passport_data: dict, extraction_backend: str | None = None
+) -> tuple[list[dict], dict[str, str]]:
+    """Обёртка над _build_comparison_items, которая заодно отдаёт наружу
+    aliases (normalized_name -> canonical_key) — нужно api-gateway, чтобы
+    характеристики ТЗ в document_characteristics (панель "как есть в
+    документе") связывались с той же строкой сравнения, что и одноимённый
+    (по смыслу) синоним где-то в документе (см. обсуждение с пользователем:
+    ТЗ реально содержит и "Частота питающей сети", и "Частота сети" как
+    отдельные вхождения — alias-резолвер верно группирует их одним ключом
+    сравнения, но в саму строку сравнения попадает только ОДНО из двух
+    имён; без aliases api-gateway не мог бы связать "непобедившее" имя с
+    той же строкой, и статус в левой панели пропадал).
+
+    Наружу отдаём ровно один canonical_key на имя (первый из
+    _char_name_keys), даже если внутри сравнения имя участвует в
+    нескольких группах (диапазон паспорта -> два ТЗ-требования, см.
+    _build_char_map) — api-gateway использует этот ключ как единственный
+    идентификатор связи "характеристика документа -> строка сравнения",
+    и two ключа на одно и то же сырое имя documentа сломали бы эту связь."""
+    tz_products = _normalize_products(tz_data)
+    passport_products = _normalize_products(passport_data)
+    aliases = _resolve_char_name_aliases(tz_products, passport_products, extraction_backend)
+    items = _build_comparison_items(tz_data, passport_data, aliases)
+    primary_aliases = {name: keys[0] for name, keys in aliases.items() if keys}
+    return items, primary_aliases
+
+
+def _build_comparison_items(
+    tz_data: dict, passport_data: dict, aliases: dict[str, list[str]] | None = None
+) -> list[dict]:
     tz_products = _normalize_products(tz_data)
     passport_products = _normalize_products(passport_data)
     # Изделия паспорта НЕ фильтруются по целевой модели: сравниваем все модели,
@@ -763,15 +1343,13 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
     # дублируется: один ряд только с ТЗ, второй только с паспортом).
     if len(tz_products) == 1 and len(passport_products) == 1:
         return _mark_target_model_items(
-            _compare_product_pair(tz_products[0], passport_products[0]),
+            _compare_product_pair(tz_products[0], passport_products[0], aliases),
             tz_products,
             passport_products,
         )
 
-    ordered_products = _ordered_products(tz_products, passport_products)
-
-    tz_map = _build_char_map(tz_products)
-    passport_map = _build_char_map(passport_products)
+    tz_map = _build_char_map(tz_products, aliases)
+    passport_map = _build_char_map(passport_products, aliases)
 
     tz_product_chars = {
         item.get("product_name") or "Неизвестное изделие": item.get("characteristics", [])
@@ -794,7 +1372,7 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
             passport_chars_map = passport_map.get(product_name, {})
             passport_chars_list = passport_product_chars.get(product_name, [])
             ordered_char_names = _ordered_characteristics(
-                tz_chars_list, passport_chars_list
+                tz_chars_list, passport_chars_list, aliases
             )
             for char_key, char_name in ordered_char_names:
                 tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
@@ -803,6 +1381,46 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
                 items.append(
                     {
                         "product_name": product_name,
+                        "tz_product_name": tz_baseline_name,
+                        "characteristic": char_name,
+                        "tz_value": tz_entry.get("value"),
+                        "passport_value": passport_entry.get("value"),
+                        "tz_references": tz_entry.get("references", []),
+                        "passport_references": passport_entry.get("references", []),
+                        "passport_value_candidates": passport_candidates,
+                    }
+                )
+        return _mark_target_model_items(items, tz_products, passport_products)
+
+    if len(passport_products) == 1 and len(tz_products) > 1:
+        # Паспорт извлечён как единый продукт (напр. backend yandex_vision_ocr
+        # не смог определить variant для каждой характеристики — несколько
+        # исполнений изделия описаны в паспорте одной таблицей без явного
+        # разделения по моделям), а ТЗ разбито на несколько именованных
+        # моделей. Точное совпадение product_name (общая ветка ниже) не
+        # находит НИЧЕГО — паспортный продукт называется иначе, чем любая
+        # модель ТЗ. Симметрично уже существующей ветке выше ("1 ТЗ-продукт :
+        # N паспорт-продуктов"): сравниваем единственный паспортный продукт
+        # со всеми ТЗ-продуктами по очереди, не завязываясь на имя.
+        passport_baseline = passport_products[0]
+        passport_baseline_name = passport_baseline.get("product_name") or "Неизвестное изделие"
+        passport_chars_map = passport_map.get(passport_baseline_name, {})
+        passport_chars_list = passport_product_chars.get(passport_baseline_name, [])
+        for tz_product in tz_products:
+            product_name = tz_product.get("product_name") or "Неизвестное изделие"
+            tz_chars_map = tz_map.get(product_name, {})
+            tz_chars_list = tz_product_chars.get(product_name, [])
+            ordered_char_names = _ordered_characteristics(
+                tz_chars_list, passport_chars_list, aliases
+            )
+            for char_key, char_name in ordered_char_names:
+                tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
+                passport_candidates = passport_chars_map.get(char_key, [])
+                passport_entry = _primary_entry(passport_candidates)
+                items.append(
+                    {
+                        "product_name": product_name,
+                        "tz_product_name": product_name,
                         "characteristic": char_name,
                         "tz_value": tz_entry.get("value"),
                         "passport_value": passport_entry.get("value"),
@@ -824,27 +1442,52 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
     # одноимённом паспортном продукте — ищем её по ВСЕМ остальным паспортным
     # изделиям и собираем все найденные значения как кандидатов (та же идея,
     # что уже применяется для нескольких упоминаний внутри одного изделия).
-    tz_general_name = next(
-        (p.get("product_name") for p in tz_products if p.get("product_name") == "Общее"),
-        None,
+    tz_general = next(
+        (p for p in tz_products if p.get("product_name") == "Общее"), None
     )
+    passport_general = next(
+        (p for p in passport_products if p.get("product_name") == "Общее"), None
+    )
+    tz_products_by_model = [p for p in tz_products if p is not tz_general]
+    passport_products_by_model = [p for p in passport_products if p is not passport_general]
 
-    for product in ordered_products:
-        product_name = product.get("product_name") or "Неизвестное изделие"
-        tz_chars_map = tz_map.get(product_name, {})
-        passport_chars_map = passport_map.get(product_name, {})
-        tz_chars_list = tz_product_chars.get(product_name, [])
-        passport_chars_list = passport_product_chars.get(product_name, [])
+    # Пары строятся по _models_match (числовое ядро типоразмера), а НЕ по
+    # точному product_name (см. docstring _pair_products_by_model) — ТЗ и
+    # паспорт почти всегда называют одну и ту же модель разными словами
+    # ("Unipump Насос шламовый USP4A 100-15-9" vs "Шламовый насос USP4A
+    # 100-15-9"), и раньше такие пары никогда не встречались под одним ключом
+    # словаря — весь набор характеристик паспорта был недостижим для
+    # соответствующей модели ТЗ.
+    product_pairs = _pair_products_by_model(tz_products_by_model, passport_products_by_model)
+    if tz_general is not None or passport_general is not None:
+        product_pairs.append((tz_general, passport_general))
+
+    for tz_product, passport_product in product_pairs:
+        # Строка сравнения помечается именем изделия с той стороны, что есть
+        # (обычно паспорт — там формулировка модели точнее числового кода);
+        # если пара односторонняя — используем то, что доступно.
+        product_name = (
+            (passport_product or {}).get("product_name")
+            or (tz_product or {}).get("product_name")
+            or "Неизвестное изделие"
+        )
+        tz_product_name = (tz_product or {}).get("product_name") or product_name
+        tz_key = (tz_product or {}).get("product_name") or "Неизвестное изделие"
+        passport_key = (passport_product or {}).get("product_name") or "Неизвестное изделие"
+        tz_chars_map = tz_map.get(tz_key, {})
+        passport_chars_map = passport_map.get(passport_key, {})
+        tz_chars_list = tz_product_chars.get(tz_key, [])
+        passport_chars_list = passport_product_chars.get(passport_key, [])
         ordered_char_names = _ordered_characteristics(
-            tz_chars_list, passport_chars_list
+            tz_chars_list, passport_chars_list, aliases
         )
 
         for char_key, char_name in ordered_char_names:
             tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
             passport_candidates = passport_chars_map.get(char_key, [])
-            if not passport_candidates and product_name == tz_general_name:
+            if not passport_candidates and tz_product is tz_general:
                 for other_product_name, other_chars_map in passport_map.items():
-                    if other_product_name == product_name:
+                    if other_product_name == passport_key:
                         continue
                     passport_candidates = passport_candidates + other_chars_map.get(
                         char_key, []
@@ -853,6 +1496,7 @@ def _build_comparison_items(tz_data: dict, passport_data: dict) -> list[dict]:
             items.append(
                 {
                     "product_name": product_name,
+                    "tz_product_name": tz_product_name,
                     "characteristic": char_name,
                     "tz_value": tz_entry.get("value"),
                     "passport_value": passport_entry.get("value"),
@@ -958,11 +1602,19 @@ class _LlmProvider(NamedTuple):
     model: str
 
 
-# Оба этих backend'а структурируют текст моделью Yandex, поэтому и сравнение
-# выполняет модель из Yandex AI Studio — весь анализ идёт по одному стеку.
-# Остальные backend'ы (включая пустой, т.е. анализы, созданные до появления
-# выбора) сравниваются через AI Tunnel.
-_YANDEX_BACKENDS = frozenset({"yandex_vision_ocr", "paddleocr_vl"})
+# paddleocr_vl структурирует текст моделью Yandex, поэтому и сравнение для
+# него выполняет модель из Yandex AI Studio — весь анализ идёт по одному стеку.
+_YANDEX_BACKENDS = frozenset({"paddleocr_vl"})
+
+# yandex_vision_ocr: OCR и structuring остаются на Yandex (там своя причина —
+# см. yandex_structurer.py), но САМО сравнение переведено на AI Tunnel —
+# сравнительный тест на реальном документе (насос, 16 характеристик с
+# значениями в обоих документах) показал: Yandex/qwen3-235b дал 0 ложных
+# совпадений за ~11.5 мин; AI Tunnel/gpt-5.6-luna-pro после исправления
+# правила про диапазон/допуск в промпте (см. prompt-registry) дал ИДЕНТИЧНЫЙ
+# результат по всем 16 строкам за ~106 сек — то есть та же точность в разы
+# быстрее. paddleocr_vl не тестировался отдельно, поэтому остаётся на Yandex.
+_AI_TUNNEL_COMPARE_MODEL = "gpt-5.6-luna-pro"
 
 
 def _resolve_llm_provider(extraction_backend: str | None) -> _LlmProvider:
@@ -986,6 +1638,13 @@ def _resolve_llm_provider(extraction_backend: str | None) -> _LlmProvider:
                 # gpt://<folder>/<model>, короткое имя не принимается.
                 model=f"gpt://{settings.YANDEX_FOLDER_ID}/{settings.YANDEX_COMPARE_MODEL}",
             )
+    if backend == "yandex_vision_ocr":
+        return _LlmProvider(
+            name="ai_tunnel_gpt56",
+            base_url=settings.OPENROUTER_BASE_URL,
+            api_key=settings.OPENROUTER_API_KEY,
+            model=_AI_TUNNEL_COMPARE_MODEL,
+        )
     return _LlmProvider(
         name="ai_tunnel",
         base_url=settings.OPENROUTER_BASE_URL,
@@ -1033,14 +1692,48 @@ def _compare_chunk(items: list[dict], extraction_backend: str | None = None) -> 
         len(items), provider.model, provider.name,
         extra={"step": "compare_chunk_request"},
     )
-    with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
-        resp = client.post(
-            f"{provider.base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    # До 3 попыток на временные сбои провайдера (5xx, обрыв соединения) —
+    # единичный 503 от AI Tunnel/Yandex не должен валить весь анализ (см.
+    # обсуждение с пользователем: реальный сбой на 503 Service Unavailable
+    # уронил compare_documents целиком через ThreadPoolExecutor.map, хотя
+    # повторный запрос почти наверняка прошёл бы). 4xx (неверный ключ,
+    # некорректный payload) НЕ ретраятся — повтор с теми же данными даст тот
+    # же результат, задержка только маскирует настоящую ошибку.
+    max_attempts = 3
+    retry_base_delay_seconds = 5.0
+    data: dict | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{provider.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            break
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500 or attempt == max_attempts:
+                raise
+            delay = retry_base_delay_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "compare_chunk: %s on attempt %d/%d, retrying in %.0fs",
+                exc, attempt, max_attempts, delay,
+                extra={"step": "compare_chunk_retry"},
+            )
+            time.sleep(delay)
+        except httpx.TransportError as exc:
+            if attempt == max_attempts:
+                raise
+            delay = retry_base_delay_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "compare_chunk: %s on attempt %d/%d, retrying in %.0fs",
+                exc, attempt, max_attempts, delay,
+                extra={"step": "compare_chunk_retry"},
+            )
+            time.sleep(delay)
+    assert data is not None  # достигается только по break выше
 
     elapsed = time.monotonic() - started_at
     content = (
@@ -1156,7 +1849,9 @@ def compare_json(
     tz_data: dict, passport_data: dict, extraction_backend: str | None = None
 ) -> dict:
     started_at = time.monotonic()
-    items = _build_comparison_items(tz_data, passport_data)
+    items, char_name_aliases = _build_comparison_items_with_aliases(
+        tz_data, passport_data, extraction_backend
+    )
     logger.info(
         "compare_json started: %d comparison items", len(items),
         extra={"step": "compare_json_start"},
@@ -1170,6 +1865,7 @@ def compare_json(
             "match": False,
             "summary": "Нет данных для сравнения.",
             "comparisons": [],
+            "char_name_aliases": char_name_aliases,
         }
 
     chunk_size = settings.COMPARE_CHUNK_SIZE
@@ -1179,13 +1875,8 @@ def compare_json(
         extra={"step": "compare_json_chunks"},
     )
 
-    all_comparisons: list[dict] = []
-    summaries: list[str] = []
-    debug_chunk: dict | None = None
-
-    for chunk_index, chunk_items in enumerate(chunks):
-        if not chunk_items:
-            continue
+    def _process_chunk(indexed: tuple[int, list[dict]]) -> tuple[list[dict], str | None]:
+        chunk_index, chunk_items = indexed
         try:
             result = _compare_chunk(chunk_items, extraction_backend)
         except CompareParseError as exc:
@@ -1240,6 +1931,16 @@ def compare_json(
             # По ним UI группирует строки и по умолчанию показывает только
             # целевую модель (плюс «Общее»).
             comparisons[idx]["product_name"] = item.get("product_name")
+            # Имя изделия ТЗ — отдельно от product_name (имя изделия паспорта),
+            # т.к. при N паспорт-моделей на 1 ТЗ-модель (типичный случай после
+            # variant-фикса structuring) они не совпадают буквально. Нужно
+            # api-gateway/фронтенду, чтобы связать строку сравнения с
+            # характеристикой ТЗ по правильному ключу (см. characteristicKey
+            # в pdf-analyzer) — иначе статус сопоставления не находит пару и
+            # пропадает в левой панели.
+            comparisons[idx]["tz_product_name"] = item.get("tz_product_name") or item.get(
+                "product_name"
+            )
             comparisons[idx]["is_target_model"] = item.get("is_target_model", True)
             # Если значения однозначно совпадают, всегда ставим is_match=True,
             # независимо от того, что вернула LLM
@@ -1254,18 +1955,36 @@ def compare_json(
             ):
                 comparisons[idx]["note"] = None
             comparisons[idx] = _attach_evidence_to_comparison(item, comparisons[idx])
+
+        summary = result.get("summary")
+        summary_text = summary.strip() if isinstance(summary, str) and summary.strip() else None
+        return comparisons, summary_text
+
+    # Чанки независимы (разные наборы characteristics, ни один не читает
+    # результат другого) — обрабатываем их параллельно в потоках вместо
+    # строго последовательного цикла. Каждый _compare_chunk — блокирующий
+    # I/O-bound HTTP-запрос к LLM (десятки-сотни секунд ожидания ответа), не
+    # CPU-bound работа, поэтому GIL не мешает реальному параллелизму здесь.
+    # ThreadPoolExecutor.map сохраняет порядок результатов, соответствующий
+    # порядку chunks, — важно для стабильного debug_chunk (всегда первый по
+    # порядку документа, не первый завершившийся).
+    indexed_chunks = [(i, c) for i, c in enumerate(chunks) if c]
+    max_workers = max(1, min(settings.COMPARE_CHUNK_CONCURRENCY, len(indexed_chunks) or 1))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunk_results = list(executor.map(_process_chunk, indexed_chunks))
+
+    all_comparisons: list[dict] = []
+    summaries: list[str] = []
+    debug_chunk: dict | None = None
+    for (_, chunk_items), (comparisons, summary_text) in zip(indexed_chunks, chunk_results):
         all_comparisons.extend(comparisons)
         if debug_chunk is None:
             debug_chunk = {
                 "input_items": chunk_items,
                 "comparisons": comparisons,
             }
-        delay_seconds = settings.COMPARE_CHUNK_DELAY_SECONDS
-        if delay_seconds and delay_seconds > 0:
-            time.sleep(delay_seconds)
-        summary = result.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            summaries.append(summary.strip())
+        if summary_text:
+            summaries.append(summary_text)
 
     match_value = all(
         item.get("is_match") is True for item in all_comparisons
@@ -1276,6 +1995,7 @@ def compare_json(
         "match": match_value,
         "summary": summary_text,
         "comparisons": all_comparisons,
+        "char_name_aliases": char_name_aliases,
     }
     if debug_chunk is not None:
         result_payload["debug_chunk"] = debug_chunk

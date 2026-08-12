@@ -35,4 +35,18 @@ celery_app.conf.update(
             "routing_key": "api_gateway",
         },
     },
+    # Fallback на случай, если callback от paddleocr-vl-service (см.
+    # job_queue.py._deliver_callback там, до 6 попыток доставки с backoff)
+    # так и не дошёл — например api-gateway был недоступен всё это окно
+    # (рестарт/деплой). Каждые 3 минуты проверяем "зависшие" extraction_job
+    # (running + есть external_job_id + давно не обновлялись) напрямую через
+    # GET {paddleocr}/jobs/{external_job_id} — см. app.tasks.poll_stuck_
+    # extraction_jobs. Требует запуска воркера с флагом -B (celery beat
+    # встроен в тот же процесс, отдельный сервис не нужен).
+    beat_schedule={
+        "poll-stuck-extraction-jobs": {
+            "task": "api_gateway.poll_stuck_extraction_jobs",
+            "schedule": 180.0,
+        },
+    },
 )

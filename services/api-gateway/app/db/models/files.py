@@ -13,7 +13,7 @@ class File(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    analysis_id = Column(UUID(as_uuid=True), nullable=False)
+    analysis_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     file_type = Column(String, nullable=False)
     original_name = Column(String, nullable=False)
     storage_path = Column(String, nullable=False)

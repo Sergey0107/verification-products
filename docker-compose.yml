@@ -81,6 +81,24 @@ services:
       postgres:
         condition: service_healthy
 
+  # Планировщик периодических задач (сейчас единственная — poll_stuck_
+  # extraction_jobs, fallback-поллинг async-извлечения, см. celery_app.py
+  # beat_schedule). Отдельный процесс от api-gateway-worker намеренно: beat
+  # только РАССЫЛАЕТ задачи по расписанию в ту же очередь, реальную работу
+  # выполняют обычные воркеры — так beat не блокируется и не блокирует их, и
+  # можно безопасно масштабировать api-gateway-worker без риска запустить
+  # несколько beat-планировщиков разом (что задваивало бы задачи).
+  api-gateway-beat:
+    build: ./services/api-gateway
+    command: celery -A app.celery_app beat -l info
+    env_file:
+      - ./env/.env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   rabbitmq:
     image: rabbitmq:3-management
     ports:
@@ -94,6 +112,24 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+
+  # Чекпоинт по страницам для paddleocr-vl-service (yandex_vision_ocr backend
+  # больших многостраничных документов) — переживает рестарт контейнера
+  # (AOF), так retry по job'у продолжает с уже готовых страниц, а не с нуля.
+  # Также используется как транспорт статуса job (см. app/main.py::jobs).
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   prompt-registry:
     build: ./services/prompt-registry
@@ -227,3 +263,4 @@ volumes:
   minio-data:
   knowledge-base-data:
   logs-data:
+  redis-data:

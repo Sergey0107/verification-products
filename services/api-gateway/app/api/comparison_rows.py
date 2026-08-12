@@ -113,7 +113,8 @@ async def set_confirmed_matches(
     Характеристика может встречаться в паспорте несколько раз (разные рабочие
     точки, повтор в другой таблице), и какие из них правильные — решает
     оператор. Подтверждение выбора означает, что строка признана совпадением,
-    поэтому вместе с ним проставляется user_result.
+    поэтому вместе с ним проставляется user_result (без отдельной записи
+    UserEdit — это не отметка «Да/Нет» из модалки проверки и не комментарий).
     """
     row_uuid = parse_uuid(row_id)
     await _ensure_row_owned(db, row_uuid, current_user)
@@ -122,6 +123,11 @@ async def set_confirmed_matches(
     match_ids = sorted({item for item in payload.match_ids if item})
     has_selection = bool(match_ids)
 
+    # Выбор кандидата — НЕ отметка «совпадает/не совпадает» и не комментарий:
+    # это просто уточнение, какое из уже найденных вхождений верное. Состояние
+    # целиком хранится в confirmed_passport_matches; отдельная запись UserEdit
+    # на каждый клик раздувала бы историю правок и счётчик комментариев в UI
+    # техническими записями без содержания (comment=None).
     await db.execute(
         update(ComparisonRow)
         .where(ComparisonRow.id == row_uuid)
@@ -132,15 +138,6 @@ async def set_confirmed_matches(
             user_result=True if has_selection else None,
         )
     )
-    if has_selection:
-        db.add(
-            UserEdit(
-                comparison_row_id=row_uuid,
-                user_id=current_user.id,
-                user_result=True,
-                comment=None,
-            )
-        )
     await db.commit()
     return {"ok": True, "match_ids": match_ids}
 
@@ -178,6 +175,54 @@ async def add_comment(
                 comment=payload.comment,
             )
         )
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/comparison-rows/{row_id}/comment/{edit_id}")
+async def delete_comment(
+    row_id: str,
+    edit_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Удаляет одну запись истории (комментарий и/или отметку Да/Нет) —
+    оператор может убрать то, что написал по ошибке или что больше не
+    актуально. Не переносит user_result со следующей записи: если удалённая
+    запись была последней с явным user_result, строка возвращается к
+    вердикту LLM (llm_result) — так же ведёт себя снятие всех кандидатов
+    в set_confirmed_matches."""
+    row_uuid = parse_uuid(row_id)
+    edit_uuid = parse_uuid(edit_id)
+    await _ensure_row_owned(db, row_uuid, current_user)
+
+    result = await db.execute(
+        select(UserEdit)
+        .where(UserEdit.id == edit_uuid)
+        .where(UserEdit.comparison_row_id == row_uuid)
+    )
+    edit = result.scalar_one_or_none()
+    if edit is None:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    await db.delete(edit)
+
+    # Пересчитываем итоговую отметку строки по оставшейся истории — та же
+    # логика, что при сборке viewer-context (последняя запись с явным
+    # user_result), чтобы удаление не оставляло ComparisonRow.user_result
+    # рассинхронизированным с фактической историей.
+    remaining = await db.execute(
+        select(UserEdit.user_result)
+        .where(UserEdit.comparison_row_id == row_uuid)
+        .where(UserEdit.user_result.is_not(None))
+        .order_by(UserEdit.edited_at.desc())
+        .limit(1)
+    )
+    last_result = remaining.scalar_one_or_none()
+    await db.execute(
+        update(ComparisonRow).where(ComparisonRow.id == row_uuid).values(user_result=last_result)
+    )
+
     await db.commit()
     return {"ok": True}
 

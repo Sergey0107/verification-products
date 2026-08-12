@@ -584,6 +584,7 @@ def run_extraction_task(
     extraction_backend: str | None = None,
     target_characteristics: list[dict] | None = None,
     product_model: str | None = None,
+    job_id: str | None = None,
 ) -> dict:
     file_type = (file_type or "").lower()
     log_extra = {"analysis_id": analysis_id, "file_id": file_id, "file_type": file_type}
@@ -639,6 +640,7 @@ def run_extraction_task(
             extra={**log_extra, "step": "prompt_appendix_build"},
         )
 
+        resolved_backend = extraction_backend or settings.EXTRACTION_BACKEND
         extraction_payload = {
             "analysis_id": analysis_id,
             "file_id": file_id,
@@ -651,8 +653,17 @@ def run_extraction_task(
                 + target_characteristics_appendix
             ),
             "schema": prompt_payload.get("schema"),
-            "backend": extraction_backend or settings.EXTRACTION_BACKEND,
+            "backend": resolved_backend,
         }
+        # async_mode: только yandex_vision_ocr (облачная OCR+LLM цепочка на
+        # больших документах, см. job_queue.py на стороне paddleocr-vl-service
+        # и обсуждение с пользователем про ReadTimeout/потерю прогресса).
+        # Извлечение продолжается в фоне, результат придёт через
+        # /internal/extraction-callback — эта функция вернёт маркер вместо
+        # готового result_payload, см. ниже.
+        if resolved_backend == "yandex_vision_ocr" and job_id:
+            extraction_payload["async_mode"] = True
+            extraction_payload["job_id"] = job_id
 
         extract_started_at = time.monotonic()
         extract_resp = client.post(
@@ -662,6 +673,15 @@ def run_extraction_task(
         _raise_for_status_with_detail(extract_resp, "Extraction service")
         extract_elapsed = time.monotonic() - extract_started_at
         result_payload = extract_resp.json()
+
+        if result_payload.get("async") is True:
+            logger.info(
+                "run_extraction_task: extraction started asynchronously in %.2fs external_job_id=%s",
+                extract_elapsed, result_payload.get("job_id"),
+                extra={**log_extra, "step": "extraction_service_call_async"},
+            )
+            return result_payload
+
         geometry = (result_payload.get("extraction_metadata") or {}).get("geometry") or {}
         logger.info(
             "run_extraction_task: extraction-service responded in %.2fs "
@@ -671,24 +691,61 @@ def run_extraction_task(
             geometry.get("unmatched_labels"),
             extra={**log_extra, "step": "extraction_service_call"},
         )
-        # Порядок важен: сначала чиним плоский формат LLM-ответа во ВСЕХ местах
-        # (result, pages[].extracted_data), и только потом собираем
-        # extraction.products из pages — иначе он соберётся из искажённой структуры.
-        if _normalize_flat_products_in_place(result_payload):
-            logger.info(
-                "Wrapped flat characteristics list into a product (analysis=%s file_type=%s)",
-                analysis_id, file_type,
-                extra={**log_extra, "step": "normalize_flat_products"},
-            )
-        _normalize_docling_extraction(result_payload)
-        flagged = _validate_characteristics_against_marking(result_payload)
-        if flagged:
-            logger.info(
-                "Marking validation: flagged %d characteristic(s) as low_confidence "
-                "(value contradicts model code; analysis=%s file_type=%s)",
-                flagged, analysis_id, file_type,
-                extra={**log_extra, "step": "marking_validation"},
-            )
+
+    return postprocess_extraction_result(
+        result_payload,
+        analysis_id=analysis_id,
+        file_id=file_id,
+        file_type=file_type,
+        log_extra=log_extra,
+        started_at=started_at,
+    )
+
+
+def postprocess_extraction_result(
+    result_payload: dict,
+    *,
+    analysis_id: str,
+    file_id: str,
+    file_type: str,
+    log_extra: dict,
+    started_at: float | None = None,
+) -> dict:
+    """Нормализация и валидация результата extraction-service + debug dump —
+    ОБЯЗАТЕЛЬНЫЙ шаг для качества данных (см. _validate_characteristics_
+    against_marking, которая явно проверяет и помечает низкоуверенные
+    характеристики), выполняется одинаково для ОБОИХ путей получения
+    result_payload:
+      - синхронного (run_extraction_task вызывает эту функцию напрямую сразу
+        после ответа extraction-service);
+      - асинхронного/callback (finalize_extraction_task в tasks.py вызывает
+        эту же функцию с результатом, пришедшим от paddleocr-vl-service через
+        POST /internal/extraction-callback).
+    Раньше при async-пути эти шаги молча пропускались бы, если бы
+    результат просто сохранялся как есть — это было бы регрессией точности
+    относительно синхронного пути, поэтому пост-обработка вынесена сюда
+    единым местом вместо дублирования в двух местах."""
+    if started_at is None:
+        started_at = time.monotonic()
+
+    # Порядок важен: сначала чиним плоский формат LLM-ответа во ВСЕХ местах
+    # (result, pages[].extracted_data), и только потом собираем
+    # extraction.products из pages — иначе он соберётся из искажённой структуры.
+    if _normalize_flat_products_in_place(result_payload):
+        logger.info(
+            "Wrapped flat characteristics list into a product (analysis=%s file_type=%s)",
+            analysis_id, file_type,
+            extra={**log_extra, "step": "normalize_flat_products"},
+        )
+    _normalize_docling_extraction(result_payload)
+    flagged = _validate_characteristics_against_marking(result_payload)
+    if flagged:
+        logger.info(
+            "Marking validation: flagged %d characteristic(s) as low_confidence "
+            "(value contradicts model code; analysis=%s file_type=%s)",
+            flagged, analysis_id, file_type,
+            extra={**log_extra, "step": "marking_validation"},
+        )
 
     debug_dir = Path(settings.EXTRACTION_DEBUG_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)
@@ -703,7 +760,7 @@ def run_extraction_task(
         json.dump(result_payload, handle, ensure_ascii=True, indent=2)
 
     logger.info(
-        "run_extraction_task finished in %.2fs debug_file=%s",
+        "postprocess_extraction_result finished in %.2fs debug_file=%s",
         time.monotonic() - started_at, target,
         extra={**log_extra, "step": "run_extraction_task_finished"},
     )

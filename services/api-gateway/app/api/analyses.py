@@ -246,7 +246,35 @@ def _split_product_condition(product_name: str) -> tuple[str, str | None]:
     return match.group("product").strip(), condition
 
 
-def _build_document_characteristics(file_type: str, payload: dict | None) -> list[dict]:
+# Портировано из domain-analyze/compare_service.py (_normalize_char_name) —
+# должно быть БУКВА В БУКВУ идентично, иначе ключи не совпадут: это та же
+# нормализация, которой построен char_name_aliases (см. ниже), и только
+# совпадающий алгоритм даёт совпадающий ключ по обе стороны сети.
+_CHAR_NAME_NOISE_RE = re.compile(
+    r"\b(?:электропитани\w*|питани\w*|сети|не\s+менее|не\s+более)\b",
+    re.IGNORECASE,
+)
+_CHAR_NAME_PARENS_RE = re.compile(r"\([^)]*\)")
+_CHAR_NAME_UNIT_RE = re.compile(r",.*$")
+
+
+def _normalize_char_name(name: str | None) -> str:
+    text = str(name or "").strip().lower().replace("ё", "е")
+    if not text:
+        return ""
+    text = _CHAR_NAME_PARENS_RE.sub(" ", text)
+    text = _CHAR_NAME_UNIT_RE.sub(" ", text)
+    text = _CHAR_NAME_NOISE_RE.sub(" ", text)
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return re.sub(r"\s+", " ", str(name or "").strip().lower())
+    return text
+
+
+def _build_document_characteristics(
+    file_type: str, payload: dict | None, char_name_aliases: dict[str, str] | None = None
+) -> list[dict]:
     products = _extract_products_from_payload(payload)
     items: list[dict] = []
     for product_index, product in enumerate(products):
@@ -274,11 +302,22 @@ def _build_document_characteristics(file_type: str, payload: dict | None) -> lis
                 references_list,
                 value_text or None,
             )
+            normalized_name = _normalize_char_name(name)
+            # canonical_name — тот же ключ, которым построена строка
+            # сравнения (см. char_name_key на фронтенде, characteristicKey в
+            # pdf-analyzer): при наличии alias это семантический ключ (может
+            # объединять несколько разных сырых имён документа в один — см.
+            # обсуждение с пользователем про "Частота питающей сети"/"Частота
+            # сети"), иначе — обычная строковая нормализация как раньше.
+            canonical_name = (
+                (char_name_aliases or {}).get(normalized_name) or normalized_name
+            )
             items.append(
                 {
                     "characteristic_id": f"{file_type}-{product_index}-{characteristic_index}",
                     "product_name": product_name,
                     "name": name,
+                    "canonical_name": canonical_name,
                     "label": f"{product_name} — {name}",
                     "value": value_text,
                     "references": references_list,
@@ -378,46 +417,76 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
         query = query.where(Analysis.user_id == user.id)
     rows = await db.execute(query.order_by(Analysis.created_at.desc()))
     analyses = rows.all()
+    if not analyses:
+        return []
+
+    analysis_ids = [row.id for row in analyses]
+
+    # Один запрос на файлы всех анализов разом вместо запроса в цикле —
+    # список анализов растёт линейно, и цикл с запросом на каждую итерацию
+    # деградирует так же линейно (см. аудит: до 1+3N запросов на N анализов).
+    files_rows = await db.execute(
+        select(
+            FileModel.analysis_id,
+            FileModel.id,
+            FileModel.file_type,
+            FileModel.original_name,
+            FileModel.status,
+        ).where(FileModel.analysis_id.in_(analysis_ids))
+    )
+    files_by_analysis: dict[UUID, list] = {}
+    for row in files_rows.all():
+        files_by_analysis.setdefault(row.analysis_id, []).append(row)
+
+    failed_ids = [row.id for row in analyses if row.status == "failed"]
+    latest_extraction_error: dict[UUID, tuple[str, str]] = {}
+    latest_comparison_error: dict[UUID, str] = {}
+    if failed_ids:
+        # ORDER BY updated_at DESC + "первое увиденное значение побеждает"
+        # в Python — то же самое, что DISTINCT ON (analysis_id) в Postgres,
+        # но без завязки на диалект. Всё ещё 2 запроса вместо 1 на анализ.
+        extraction_error_rows = await db.execute(
+            select(
+                ExtractionJob.analysis_id,
+                ExtractionJob.file_type,
+                ExtractionJob.last_error,
+            )
+            .where(ExtractionJob.analysis_id.in_(failed_ids))
+            .where(ExtractionJob.last_error.is_not(None))
+            .order_by(ExtractionJob.analysis_id, ExtractionJob.updated_at.desc())
+        )
+        for row in extraction_error_rows.all():
+            latest_extraction_error.setdefault(row.analysis_id, (row.file_type, row.last_error))
+
+        comparison_error_rows = await db.execute(
+            select(ComparisonJob.analysis_id, ComparisonJob.last_error)
+            .where(ComparisonJob.analysis_id.in_(failed_ids))
+            .where(ComparisonJob.last_error.is_not(None))
+            .order_by(ComparisonJob.analysis_id, ComparisonJob.updated_at.desc())
+        )
+        for row in comparison_error_rows.all():
+            latest_comparison_error.setdefault(row.analysis_id, row.last_error)
+
     items = []
     for analysis_id, status, created_at, extraction_backend, task_id, product_model, completed_at in analyses:
-        files_rows = await db.execute(
-            select(
-                FileModel.id,
-                FileModel.file_type,
-                FileModel.original_name,
-                FileModel.status,
-            ).where(FileModel.analysis_id == analysis_id)
-        )
-        files = files_rows.all()
+        files = files_by_analysis.get(analysis_id, [])
         tz = next((f for f in files if f.file_type == "tz"), None)
         passport = next((f for f in files if f.file_type == "passport"), None)
         error_summary = None
         error_detail = None
         if status == "failed":
-            extraction_error_rows = await db.execute(
-                select(ExtractionJob.file_type, ExtractionJob.last_error)
-                .where(ExtractionJob.analysis_id == analysis_id)
-                .where(ExtractionJob.last_error.is_not(None))
-                .order_by(ExtractionJob.updated_at.desc())
-            )
-            extraction_error = extraction_error_rows.first()
+            extraction_error = latest_extraction_error.get(analysis_id)
             if extraction_error:
-                file_label = "ТЗ" if extraction_error.file_type == "tz" else "паспорт"
+                file_type, last_error = extraction_error
+                file_label = "ТЗ" if file_type == "tz" else "паспорт"
                 error_summary, error_detail = _build_error_payload(
                     f"Ошибка извлечения ({file_label})",
-                    extraction_error.last_error,
+                    last_error,
                 )
             else:
-                comparison_error_rows = await db.execute(
-                    select(ComparisonJob.last_error)
-                    .where(ComparisonJob.analysis_id == analysis_id)
-                    .where(ComparisonJob.last_error.is_not(None))
-                    .order_by(ComparisonJob.updated_at.desc())
-                )
-                comparison_error = comparison_error_rows.scalar_one_or_none()
                 error_summary, error_detail = _build_error_payload(
                     "Ошибка сравнения",
-                    comparison_error,
+                    latest_comparison_error.get(analysis_id),
                 )
 
         items.append(
@@ -521,6 +590,29 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
         select(FileModel).where(FileModel.analysis_id == analysis_id)
     )
     file_rows = files_result.scalars().all()
+
+    # char_name_aliases (normalized_name -> canonical_key) — сохранены
+    # compare_service.py вместе с самим результатом сравнения (см.
+    # compare_json/_build_comparison_items_with_aliases). Нужны здесь, чтобы
+    # характеристика ТЗ, чьё сырое имя LLM сгруппировала с ДРУГИМ синонимом
+    # документа (см. characteristic_key в _build_document_characteristics),
+    # находила ту же строку сравнения — иначе статус в левой панели ТЗ
+    # пропадает, даже если сама строка сравнения существует.
+    comparison_job_result = await db.execute(
+        select(ComparisonJob.result)
+        .where(ComparisonJob.analysis_id == analysis_id)
+        .order_by(ComparisonJob.created_at.desc())
+        .limit(1)
+    )
+    comparison_result = comparison_job_result.scalar_one_or_none()
+    char_name_aliases = (
+        comparison_result.get("char_name_aliases")
+        if isinstance(comparison_result, dict)
+        else None
+    )
+    if not isinstance(char_name_aliases, dict):
+        char_name_aliases = None
+
     documents: dict[str, dict] = {}
     for file_row in file_rows:
         documents[file_row.file_type] = {
@@ -533,6 +625,7 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
             "characteristics": _build_document_characteristics(
                 file_row.file_type,
                 extraction_results.get(file_row.file_type),
+                char_name_aliases,
             ),
         }
 
@@ -575,6 +668,7 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
             if edit.user_result is not None or comment:
                 feedback_by_row.setdefault(row_key, []).append(
                     {
+                        "id": str(edit.id),
                         "author": author,
                         "user_result": edit.user_result,
                         "comment": comment,
@@ -602,7 +696,7 @@ async def build_viewer_context_payload(analysis_id: UUID, db: AsyncSession) -> d
         "processing_seconds": processing_seconds,
         "rows": [
             _build_viewer_row(
-                row, user_edits_by_row, tz_comments_by_name, feedback_by_row
+                row, user_edits_by_row, tz_comments_by_name, feedback_by_row, char_name_aliases
             )
             for row in rows
         ],
@@ -614,6 +708,7 @@ def _build_viewer_row(
     user_edits_by_row: dict[str, list[str]],
     tz_comments_by_name: dict[str, list[str]],
     feedback_by_row: dict[str, list[dict]],
+    char_name_aliases: dict[str, str] | None = None,
 ) -> dict:
     row_id = str(row.id)
     feedback = feedback_by_row.get(row_id, [])
@@ -623,13 +718,30 @@ def _build_viewer_row(
         (fb for fb in reversed(feedback) if fb.get("user_result") is not None),
         None,
     )
+    normalized_characteristic = _normalize_char_name(row.characteristic)
+    # characteristic_key — тот же canonical-ключ, что и document_characteristics
+    # (см. _build_document_characteristics): при наличии alias для
+    # ОТОБРАЖАЕМОГО имени строки сравнения (row.characteristic — только ОДНО
+    # из, возможно, нескольких синонимичных сырых имён документа, см.
+    # docstring _build_comparison_items_with_aliases) фронтенд должен
+    # связывать по этому ключу, а не по самому имени — иначе синоним, чьё имя
+    # проиграло при построении строки, никогда не найдёт свою пару.
+    characteristic_key = (
+        (char_name_aliases or {}).get(normalized_characteristic) or normalized_characteristic
+    )
     return {
         "row_id": row_id,
         "product_name": row.product_name,
+        # Изделие ТЗ этой строки — может отличаться от product_name (изделия
+        # паспорта), когда паспорт описывает несколько моделей. NULL — старые
+        # строки до появления колонки; фронтенд тогда падает обратно на
+        # product_name (см. viewer-context.ts).
+        "tz_product_name": row.tz_product_name,
         # None трактуется фронтендом как True (показывать) — так строки,
         # созданные до появления колонки, не пропадают из списка.
         "is_target_model": row.is_target_model,
         "characteristic": row.characteristic,
+        "characteristic_key": characteristic_key,
         "tz_value": row.tz_value,
         "passport_value": row.passport_value,
         "llm_result": row.llm_result,
