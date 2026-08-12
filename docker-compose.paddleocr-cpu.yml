@@ -32,7 +32,7 @@ services:
       # ключ, что domain-analyze/compare_service.py использует для AI Tunnel).
       # По той же причине YANDEX_API_KEY/YANDEX_FOLDER_ID (для Vision OCR)
       # тоже нигде не продублированы через environment: — только env_file.
-      - LLM_MODEL=${LLM_MODEL:-gpt-5.6-luna-pro}
+      - LLM_MODEL=${LLM_MODEL:-qwen/qwen3.7-flash}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-32000}
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-180}
       # ${VAR:-default} здесь интерполирует compose CLI из .env в CWD (его нет)

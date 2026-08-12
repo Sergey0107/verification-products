@@ -26,6 +26,7 @@ def compare_documents(
     tz_data: dict,
     passport_data: dict,
     extraction_backend: str | None = None,
+    tz_product_model: str | None = None,
 ) -> None:
     log_extra = {"analysis_id": analysis_id, "job_id": job_id}
     started_at = time.monotonic()
@@ -39,7 +40,7 @@ def compare_documents(
     )
     payload: dict | None = None
     try:
-        result = compare_json(tz_data, passport_data, extraction_backend)
+        result = compare_json(tz_data, passport_data, extraction_backend, tz_product_model)
         payload = {
             "job_id": job_id,
             "analysis_id": analysis_id,

@@ -22,7 +22,7 @@ from app.db.models.analysis import ComparisonRow, HiddenCharacteristic, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
 from app.services.extraction_backends import extraction_backend_label
-from app.tasks import extract_file
+from app.tasks import try_start_comparison
 
 router = APIRouter()
 
@@ -1071,98 +1071,16 @@ async def continue_tz_review(
     if not approved_rows:
         raise HTTPException(status_code=400, detail="At least one TZ characteristic must be approved")
 
-    passport_result = await db.execute(
-        select(FileModel)
-        .where(FileModel.analysis_id == analysis_uuid)
-        .where(FileModel.file_type == "passport")
-    )
-    passport_file = passport_result.scalar_one_or_none()
-    if passport_file is None:
-        raise HTTPException(status_code=404, detail="Passport file not found")
-    if passport_file.status != "uploaded":
-        raise HTTPException(status_code=409, detail="Passport file is not uploaded")
-
-    await db.execute(
-        update(Analysis)
-        .where(Analysis.id == analysis_uuid)
-        .values(status="extracting_passport", updated_at=datetime.utcnow())
-    )
-    create_job = (
-        insert(ExtractionJob)
-        .values(
-            analysis_id=analysis_uuid,
-            file_id=passport_file.id,
-            file_type="passport",
-            status="queued",
-        )
-        .on_conflict_do_nothing(index_elements=["analysis_id", "file_id", "file_type"])
-        .returning(ExtractionJob.id)
-    )
-    job_result = await db.execute(create_job)
-    job_id = job_result.scalar_one_or_none()
-    should_enqueue = job_id is not None
-    if job_id is None:
-        existing_result = await db.execute(
-            select(ExtractionJob)
-            .where(ExtractionJob.analysis_id == analysis_uuid)
-            .where(ExtractionJob.file_id == passport_file.id)
-            .where(ExtractionJob.file_type == "passport")
-        )
-        existing_job = existing_result.scalar_one_or_none()
-        if existing_job is None:
-            raise HTTPException(status_code=500, detail="Failed to create passport extraction job")
-        job_id = existing_job.id
-        should_enqueue = existing_job.status == "failed"
-        if should_enqueue:
-            await db.execute(
-                update(ExtractionJob)
-                .where(ExtractionJob.id == existing_job.id)
-                .values(
-                    status="queued",
-                    attempts=0,
-                    last_error=None,
-                    updated_at=datetime.utcnow(),
-                    completed_at=None,
-                )
-            )
-
-    # Достаём product_model из extraction result ТЗ чтобы передать в паспорт —
-    # LLM будет знать какую именно модель искать в таблице паспорта
-    tz_product_model: str | None = None
-    try:
-        tz_extraction_result = await db.execute(
-            select(ExtractionResult).where(
-                ExtractionResult.analysis_id == analysis_uuid,
-                ExtractionResult.file_type == "tz",
-            )
-        )
-        tz_extraction = tz_extraction_result.scalar_one_or_none()
-        if tz_extraction and tz_extraction.payload:
-            products = tz_extraction.payload.get("extraction", {}).get("products", [])
-            if products:
-                tz_product_model = products[0].get("product_model")
-    except Exception:
-        pass
-
-    # fallback: если LLM не нашёл модель в TZ, используем модель из Analysis (от пользователя)
-    if not tz_product_model:
-        tz_product_model = analysis.product_model
-
+    # Паспорт уже поставлен в очередь извлечения сразу после загрузки файлов
+    # (см. files_callback) — не дожидаясь одобрения ТЗ, оба извлечения идут
+    # параллельно. Здесь просто пробуем запустить сравнение: если паспорт уже
+    # извлёкся (обычный случай — извлечение занимает секунды-минуты, а
+    # пользователь может открыть tz_review не сразу), сравнение стартует
+    # прямо сейчас; если ещё нет — try_start_comparison тихо ничего не
+    # делает, и сравнение стартует позже само, когда извлечение паспорта
+    # завершится (см. _finalize_extraction/try_start_comparison в tasks.py).
     await db.commit()
-    if should_enqueue:
-        extract_file.apply_async(
-            args=[
-                str(job_id),
-                str(analysis_uuid),
-                str(passport_file.id),
-                "passport",
-                passport_file.storage_path,
-                passport_file.storage_url,
-                analysis.extraction_backend,
-                _review_target_characteristics(approved_rows, tz_product_model),
-            ],
-            task_id=str(job_id),
-        )
+    try_start_comparison.apply_async(args=[str(analysis_uuid)])
     return {"ok": True, "status": "extracting_passport"}
 
 

@@ -1868,6 +1868,14 @@ def compare_json(
             # независимо от того, что вернула LLM
             if _values_clearly_match(item.get("tz_value"), item.get("passport_value")):
                 comparisons[idx]["status"] = "confident"
+            # "not_found" означает "в паспорте характеристики нет вовсе" — если
+            # passport_value (взят из извлечения документа, не от LLM) непуст,
+            # значение в паспорте физически найдено, и "not_found" будет прямо
+            # противоречить показанным пользователю данным. LLM иногда путает
+            # "в ТЗ нет конкретного значения" с "в паспорте ничего нет" —
+            # разворачиваем такой ответ в "uncertain" (требует проверки).
+            elif comparisons[idx].get("status") == "not_found" and item.get("passport_value"):
+                comparisons[idx]["status"] = "uncertain"
             # LLM иногда пишет note вида «характеристика отсутствует в паспорте»,
             # хотя passport_value/tz_value в этой же строке непустые (взяты из
             # извлечения документа, а не от LLM) — такой note противоречит данным

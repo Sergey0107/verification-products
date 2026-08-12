@@ -72,7 +72,11 @@ class ComparisonRow(Base):
     # идентификаторов вхождений: ["<row_id>-candidate-0", ...]. NULL — оператор
     # ещё не выбирал, показываем все найденные варианты как равнозначные.
     confirmed_passport_matches = Column(JSONB, nullable=True)
-    llm_result = Column(Boolean)
+    # Вердикт LLM-сравнения: "confident" (найдено, значения совпадают),
+    # "uncertain" (найдено в обоих, значения не совпадают), "not_found"
+    # (есть в ТЗ, нет в паспорте). Раньше был Boolean (is_match) — не мог
+    # различить "не совпало" от "не найдено вовсе".
+    llm_result = Column(String, nullable=True)
     user_result = Column(Boolean, nullable=True)
     note = Column(String)
     # Пользовательская корректировка метки ТЗ во вьювере: смещение (offset) и

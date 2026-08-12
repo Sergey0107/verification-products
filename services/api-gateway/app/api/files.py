@@ -155,11 +155,15 @@ async def files_callback(payload: dict, db: AsyncSession = Depends(get_db)):
             .where(Analysis.id == analysis_id)
             .values(status="extracting_data", updated_at=datetime.utcnow())
         )
+        # Оба файла (ТЗ и паспорт) ставятся в очередь извлечения сразу —
+        # паспорт больше не ждёт одобрения ТЗ пользователем (tz_review),
+        # оба извлечения идут параллельно. Сравнение всё равно стартует
+        # только когда выполнены оба условия: ТЗ одобрено И паспорт
+        # извлечён (см. try_start_comparison в comparison_trigger.py).
         files_result = await db.execute(
             select(FileModel).where(
                 FileModel.analysis_id == analysis_id,
                 FileModel.status == "uploaded",
-                FileModel.file_type == "tz",
             )
         )
         new_jobs = []

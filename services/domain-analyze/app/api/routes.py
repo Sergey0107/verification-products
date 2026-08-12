@@ -14,6 +14,10 @@ class CompareRequest(BaseModel):
     # Backend, которым извлекались характеристики. Определяет, какой LLM-провайдер
     # выполнит сравнение, чтобы весь анализ шёл через один стек.
     extraction_backend: str | None = None
+    # Код/название целевой модели ТЗ (Analysis.product_model) — нужен для
+    # выбора целевого изделия среди нескольких продуктов ТЗ, см.
+    # _select_comparison_pair в compare_service.py.
+    tz_product_model: str | None = None
 
 
 @router.get("/health")
@@ -32,7 +36,10 @@ async def create_compare_job(payload: CompareRequest):
             payload.tz_data,
             payload.passport_data,
         ],
-        kwargs={"extraction_backend": payload.extraction_backend},
+        kwargs={
+            "extraction_backend": payload.extraction_backend,
+            "tz_product_model": payload.tz_product_model,
+        },
         task_id=payload.job_id,
     )
     return {"ok": True, "job_id": payload.job_id}

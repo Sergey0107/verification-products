@@ -233,16 +233,30 @@ def _build_knowledge_base_prompt_appendix(file_type: str) -> str:
 
 
 def _build_product_model_appendix(file_type: str, product_model: str | None) -> str:
-    """Если указана модель изделия — добавляем инструкцию LLM искать характеристики только для неё."""
-    if not product_model or file_type != "tz":
+    """Инструкция LLM о целевой модели ТЗ. Если пользователь указал модель — ищем
+    именно её; если нет — явно повторяем, что решение принимает сама модель (без
+    создания второй/«Общее» модели), как того требует основной промпт "tz"."""
+    if file_type != "tz":
         return ""
+    if product_model:
+        return (
+            "\n\n=== TARGET MODEL (overrides any earlier 'find ALL models' instruction) ===\n"
+            f"The customer explicitly specified the target model: '{product_model}'. "
+            f"Extract characteristics ONLY for this model — return EXACTLY ONE object in "
+            f"`products` for it. "
+            f"If the document has a table with columns for different models, use only the column "
+            f"that corresponds to '{product_model}'. Do not take values from other model columns. "
+            f"If the model '{product_model}' is not found verbatim, extract the closest matching "
+            f"model instead — still return exactly one object, never more than one. "
+            f"Do NOT create a second object, and do NOT create an \"Общее\" object — general "
+            f"requirements not tied to a specific model belong to this same single object.\n"
+        )
     return (
-        f"\n\nIMPORTANT: The document may contain specifications for multiple product models. "
-        f"Extract characteristics ONLY for model '{product_model}'. "
-        f"If the document has a table with columns for different models, use only the column "
-        f"that corresponds to '{product_model}'. Do not take values from other model columns. "
-        f"If the model '{product_model}' is not found in the document, extract the closest match "
-        f"and note that the exact model was not found.\n"
+        "\n\n=== TARGET MODEL (overrides any earlier 'find ALL models' instruction) ===\n"
+        "The customer did not specify a target model. Determine it yourself from the document "
+        "(see the model-selection rules above) and return EXACTLY ONE object in `products` for "
+        "that model — never more than one, and never an \"Общее\" object. General requirements "
+        "not tied to a specific model belong to that same single object.\n"
     )
 
 
@@ -456,10 +470,10 @@ def _build_target_characteristics_appendix(
             f"- A value belongs to the model written ON THE SAME ROW (or in the SAME COLUMN). "
             f"Do NOT take the value from a neighbouring model's row/column — values for "
             f"adjacent models often look similar, so align each row to ITS model EXACTLY.\n"
-            "- Characteristics that are common to ALL models (напр. Напряжение, Частота тока, "
-            "Степень защиты — written once for the whole family, not per model) go into a "
-            "SEPARATE product object with \"product_name\": \"Общее\" and \"product_model\": null. "
-            "Do NOT duplicate them into every model.\n"
+            "- NEVER create a separate \"Общее\" product object. Characteristics that are common "
+            "to ALL models (напр. Напряжение, Частота тока, Степень защиты — written once for "
+            "the whole family, not per model) belong to EVERY model — DUPLICATE that same "
+            "characteristic into EACH model's product object instead of factoring it out.\n"
             "- A MODEL IS A PRODUCT, NOT AN OPERATING POINT. Different working conditions of the "
             "SAME product (head/напор, pressure, temperature, rotation speed, liquid density) are "
             "NOT separate models. Never emit products like 'ДЖАМБО 60/35, напор 0 м' / "
@@ -513,10 +527,10 @@ def _build_target_characteristics_appendix(
             "it is a serious error to take Производительность from one model and Вес from "
             "another. Every characteristic inside one object must describe the SAME physical "
             "product.\n"
-            "- Characteristics that are common to ALL models (напр. Напряжение, Частота тока, "
-            "Степень защиты — written once for the whole family, not per model) go into a "
-            "SEPARATE product object with \"product_name\": \"Общее\" and \"product_model\": null. "
-            "Do NOT duplicate them into every model.\n"
+            "- NEVER create a separate \"Общее\" product object. Characteristics that are common "
+            "to ALL models (напр. Напряжение, Частота тока, Степень защиты — written once for "
+            "the whole family, not per model) belong to EVERY model — DUPLICATE that same "
+            "characteristic into EACH model's product object instead of factoring it out.\n"
             "- A MODEL IS A PRODUCT, NOT AN OPERATING POINT. Different working conditions of the "
             "SAME product (head/напор, pressure, temperature, rotation speed, liquid density) are "
             "NOT separate models. Never emit products like 'ДЖАМБО 60/35, напор 0 м' / "
@@ -537,8 +551,7 @@ def _build_target_characteristics_appendix(
         "one object per name, in the SAME ORDER, using each name VERBATIM as the `name` field. "
         "Ignore every other characteristic in the passport; extract ONLY these.\n"
         "The number of product objects is NOT limited: return one per model described by the "
-        "passport (plus, if applicable, one \"Общее\" object for family-wide values) — see the "
-        "multi-model rules below.\n"
+        "passport — no separate \"Общее\" object, ever (see the multi-model rules below).\n"
         "For each name, read its value AS WRITTEN IN THE PASSPORT for the model of that product "
         "object. You are NOT given the expected values — read them from the passport. "
         "Never invent, guess, or copy a value from the requirement: every value MUST come "

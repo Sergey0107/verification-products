@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.db.models.comparison_jobs import ComparisonJob
-from app.db.models.analysis import TzCharacteristicReview
+from app.db.models.analysis import Analysis, TzCharacteristicReview
 from app.db.models.extraction_jobs import ExtractionJob
 from app.db.models.extraction_results import ExtractionResult
 from app.db.session_sync import SessionLocal
@@ -489,55 +489,104 @@ def _finalize_extraction(
             )
 
         if file_type == "passport" and "passport" in by_type:
-            approved_rows = _approved_review_characteristics(session, analysis_id)
-            if not approved_rows:
-                raise ValueError("Cannot compare without approved TZ characteristics")
+            # Паспорт извлекается параллельно с ТЗ (не дожидаясь tz_review),
+            # поэтому на этот момент approved TZ-строк может ещё не быть —
+            # это штатный случай, не ошибка (см. try_start_comparison,
+            # которая сама решает, готовы ли оба условия для сравнения).
+            try_start_comparison.apply_async(args=[analysis_id], task_id=None)
 
-            create_job = (
-                insert(ComparisonJob)
-                .values(
-                    analysis_id=analysis_id,
-                    status="queued",
-                    updated_at=datetime.utcnow(),
-                )
-                .on_conflict_do_nothing(index_elements=["analysis_id"])
-                .returning(ComparisonJob.id)
+
+@celery_app.task(
+    name="api_gateway.try_start_comparison",
+    queue="api_gateway",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
+def try_start_comparison(analysis_id: str) -> None:
+    """Запускает сравнение, если ОБА условия выполнены: ТЗ одобрено
+    пользователем (approved TzCharacteristicReview существуют) И паспорт
+    извлечён (ExtractionResult с file_type="passport" существует).
+
+    Вызывается из ДВУХ мест — после завершения извлечения паспорта
+    (_finalize_extraction) и после одобрения ТЗ пользователем
+    (continue_tz_review) — потому что при параллельном извлечении порядок,
+    в котором эти два события произойдут, заранее не известен. Если условие
+    не выполнено — тихо ничего не делает (не ошибка, просто "ещё рано");
+    сравнение уже запущено (ComparisonJob для analysis_id существует) —
+    тоже тихо ничего не делает (идемпотентность при повторном вызове)."""
+    log_extra = {"analysis_id": analysis_id, "step": "try_start_comparison"}
+    with SessionLocal() as session:
+        approved_rows = _approved_review_characteristics(session, analysis_id)
+        if not approved_rows:
+            return
+
+        passport_result = session.execute(
+            select(ExtractionResult).where(
+                ExtractionResult.analysis_id == analysis_id,
+                ExtractionResult.file_type == "passport",
             )
-            job_result = session.execute(create_job)
-            compare_job_id = job_result.scalar_one_or_none()
-            session.commit()
+        )
+        passport_extraction = passport_result.scalar_one_or_none()
+        if passport_extraction is None:
+            return
 
-            if compare_job_id:
-                session.execute(
-                    text("UPDATE analysis.analysis SET status=:status, updated_at=:updated_at WHERE id=:id"),
-                    {
-                        "status": "analyzing_data",
-                        "updated_at": datetime.utcnow(),
-                        "id": analysis_id,
-                    },
-                )
-                session.commit()
-                payload = {
-                    "job_id": str(compare_job_id),
-                    "analysis_id": analysis_id,
-                    "tz_data": _filtered_tz_payload(approved_rows),
-                    "passport_data": by_type["passport"],
-                    # Сравнение выполняет LLM того же провайдера, которым
-                    # извлекались характеристики: выбор в модалке задаёт оба
-                    # этапа анализа сразу.
-                    "extraction_backend": extraction_backend,
-                }
-                logger.info(
-                    "extract_file: analysis moved to analyzing_data, comparison job_id=%s "
-                    "tz_characteristics=%d",
-                    compare_job_id, len(approved_rows),
-                    extra=log_extra,
-                )
-                with httpx.Client(timeout=settings.EXTRACTION_TIMEOUT_SECONDS) as client:
-                    client.post(
-                        f"{settings.DOMAIN_ANALYZE_URL}/compare/jobs",
-                        json=payload,
-                    )
+        analysis = session.execute(
+            select(Analysis).where(Analysis.id == analysis_id)
+        ).scalar_one_or_none()
+        if analysis is None:
+            return
+
+        create_job = (
+            insert(ComparisonJob)
+            .values(
+                analysis_id=analysis_id,
+                status="queued",
+                updated_at=datetime.utcnow(),
+            )
+            .on_conflict_do_nothing(index_elements=["analysis_id"])
+            .returning(ComparisonJob.id)
+        )
+        job_result = session.execute(create_job)
+        compare_job_id = job_result.scalar_one_or_none()
+        session.commit()
+
+        if not compare_job_id:
+            # ComparisonJob для этого analysis_id уже существует — сравнение
+            # уже запущено (или запускается) другим вызовом.
+            return
+
+        session.execute(
+            text("UPDATE analysis.analysis SET status=:status, updated_at=:updated_at WHERE id=:id"),
+            {
+                "status": "analyzing_data",
+                "updated_at": datetime.utcnow(),
+                "id": analysis_id,
+            },
+        )
+        session.commit()
+        payload = {
+            "job_id": str(compare_job_id),
+            "analysis_id": analysis_id,
+            "tz_data": _filtered_tz_payload(approved_rows),
+            "passport_data": passport_extraction.payload,
+            # Сравнение выполняет LLM того же провайдера, которым
+            # извлекались характеристики: выбор в модалке задаёт оба
+            # этапа анализа сразу.
+            "extraction_backend": analysis.extraction_backend,
+            "tz_product_model": analysis.product_model,
+        }
+        logger.info(
+            "try_start_comparison: analysis moved to analyzing_data, comparison job_id=%s "
+            "tz_characteristics=%d",
+            compare_job_id, len(approved_rows),
+            extra=log_extra,
+        )
+        with httpx.Client(timeout=settings.EXTRACTION_TIMEOUT_SECONDS) as client:
+            client.post(
+                f"{settings.DOMAIN_ANALYZE_URL}/compare/jobs",
+                json=payload,
+            )
 
 
 @celery_app.task(name="api_gateway.poll_stuck_extraction_jobs")
