@@ -180,55 +180,201 @@ def _normalize_products(data: dict) -> list[dict]:
     return normalized
 
 
-def _pair_products_by_model(
-    tz_products: list[dict], passport_products: list[dict]
-) -> list[tuple[dict | None, dict | None]]:
-    """Пары (ТЗ-продукт, паспорт-продукт) для сравнения N:N изделий.
+_GENERAL_PRODUCT_NAME = "Общее"
 
-    ДО этой функции пары строились по точному совпадению product_name
-    (_ordered_products) — но ТЗ и паспорт почти всегда называют одну и ту же
-    модель по-разному ("Unipump Насос шламовый USP4A 100-15-9" в ТЗ vs
-    "Шламовый насос USP4A 100-15-9" в паспорте): точные имена никогда не
-    совпадали, и характеристики этой модели с двух сторон сравнивались как
-    РАЗНЫЕ изделия — отсюда "Мощность" из паспорта и "Мощность двигателя" из
-    ТЗ для одной и той же модели никогда не оказывались в одной строке
-    сравнения, даже после устранения строкового расхождения имён
-    характеристик (aliases). Здесь пары строятся по _models_match — тому же
-    числовому ядру типоразмера/подстроке имени, что уже используется для
-    _mark_target_model_items — так что сопоставление моделей единообразно во
-    всём файле.
 
-    Жадный алгоритм: каждый ТЗ-продукт получает лучший ещё не занятый
-    паспорт-продукт по _models_match (первый подходящий — модели документа
-    почти всегда однозначно различимы по числовому ядру, конкуренции за одну
-    и ту же пару обычно нет). Непарные продукты с обеих сторон идут отдельными
-    строками (None с другой стороны) — как раньше для действительно уникальных
-    моделей."""
-    unmatched_passport = list(passport_products)
-    pairs: list[tuple[dict | None, dict | None]] = []
+def _merge_general_into_products(products: list[dict]) -> list[dict]:
+    """Домешивает характеристики продукта "Общее" (не привязанные к
+    конкретному изделию) в КАЖДЫЙ остальной продукт, затем убирает "Общее"
+    из списка. Раньше "Общее" участвовало в сравнении как отдельная
+    псевдо-модель с собственным fallback-путём поиска пары в паспорте — то
+    есть отдельный блок результата, которого по новой архитектуре быть не
+    должно (сравниваются только два реальных изделия, "Общее" — не изделие).
 
-    for tz_product in tz_products:
-        tz_model = tz_product.get("product_model") or tz_product.get("product_name")
-        match_index = next(
+    Специфичная для модели характеристика приоритетнее одноимённой из
+    "Общее" — при конфликте имён общее значение не перезаписывает уже
+    существующее в продукте (сравнение по нормализованной строке имени, без
+    aliases: на этом этапе aliases ещё не построены — они зависят от
+    итогового набора продуктов после мержа)."""
+    general = next(
+        (p for p in products if p.get("product_name") == _GENERAL_PRODUCT_NAME), None
+    )
+    if general is None:
+        return products
+
+    general_chars = general.get("characteristics") or []
+    result: list[dict] = []
+    for product in products:
+        if product is general:
+            continue
+        existing_keys = {
+            _normalize_char_name(c.get("name"))
+            for c in (product.get("characteristics") or [])
+            if isinstance(c, dict)
+        }
+        merged_chars = list(product.get("characteristics") or [])
+        for char in general_chars:
+            if not isinstance(char, dict):
+                continue
+            if _normalize_char_name(char.get("name")) in existing_keys:
+                continue
+            merged_chars.append(char)
+        result.append({**product, "characteristics": merged_chars})
+    return result
+
+
+def _count_non_empty_characteristics(product: dict) -> int:
+    return sum(
+        1
+        for c in (product.get("characteristics") or [])
+        if isinstance(c, dict) and c.get("value")
+    )
+
+
+def _select_comparison_pair(
+    tz_products: list[dict],
+    passport_products: list[dict],
+    tz_product_model: str | None,
+    extraction_backend: str | None,
+) -> tuple[dict | None, dict | None]:
+    """Выбирает РОВНО одну пару (ТЗ-изделие, паспорт-изделие) для сравнения —
+    никакой матрицы "каждое ТЗ-изделие против каждого паспорт-изделия".
+
+    ТЗ трактуется как заказ на одно конкретное изделие: если продуктов ТЗ
+    несколько, целевой определяется по приоритету:
+    (a) tz_product_model (введённое пользователем в модалке загрузки),
+        сматченный с product_model/product_name продуктов через _models_match;
+    (b) product_model, уже извлечённый LLM внутри самого продукта ТЗ на
+        этапе extraction (тот же источник, что читал старый continue_tz_review);
+    (c) если неоднозначно — первый продукт (система всегда выбирает
+        какое-то название, не оставляет изделие неопределённым).
+
+    Пара в паспорте ищется по совпадению имени: точное product_name ->
+    LLM-сопоставление по смыслу -> единственный fallback (самое наполненное
+    изделие с каждой стороны, независимо друг от друга)."""
+    if not tz_products or not passport_products:
+        return None, None
+
+    if len(tz_products) == 1:
+        tz_product = tz_products[0]
+    else:
+        tz_product = None
+        if tz_product_model:
+            tz_product = next(
+                (
+                    p
+                    for p in tz_products
+                    if _models_match(tz_product_model, p.get("product_model"))
+                    or _models_match(tz_product_model, p.get("product_name"))
+                ),
+                None,
+            )
+        if tz_product is None:
+            tz_product = next(
+                (p for p in tz_products if p.get("product_model")), None
+            )
+        if tz_product is None:
+            tz_product = tz_products[0]
+
+    target_name = tz_product.get("product_name")
+    target_model = tz_product.get("product_model") or tz_product_model
+
+    passport_product = next(
+        (p for p in passport_products if p.get("product_name") == target_name), None
+    )
+    if passport_product is None and target_model:
+        passport_product = next(
             (
-                index
-                for index, passport_product in enumerate(unmatched_passport)
-                if _models_match(
-                    tz_model,
-                    passport_product.get("product_model") or passport_product.get("product_name"),
-                )
+                p
+                for p in passport_products
+                if _models_match(target_model, p.get("product_model"))
+                or _models_match(target_model, p.get("product_name"))
             ),
             None,
         )
-        if match_index is not None:
-            pairs.append((tz_product, unmatched_passport.pop(match_index)))
-        else:
-            pairs.append((tz_product, None))
+    if passport_product is None and len(passport_products) > 1:
+        passport_product = _resolve_target_product_name(
+            target_name, passport_products, extraction_backend
+        )
+    if passport_product is None:
+        # Единственный fallback: самое наполненное изделие с каждой стороны,
+        # независимо друг от друга.
+        tz_product = max(tz_products, key=_count_non_empty_characteristics)
+        passport_product = max(passport_products, key=_count_non_empty_characteristics)
 
-    for passport_product in unmatched_passport:
-        pairs.append((None, passport_product))
+    return tz_product, passport_product
 
-    return pairs
+
+def _resolve_target_product_name(
+    tz_product_name: str | None,
+    passport_products: list[dict],
+    extraction_backend: str | None,
+) -> dict | None:
+    """Лёгкий LLM-запрос: "какое из этих названий изделий паспорта — то же
+    самое, что это название из ТЗ" (по смыслу, а не по точному тексту).
+    Отдельный небольшой промпт, а не весь документ — дёшево и быстро."""
+    if not tz_product_name:
+        return None
+    passport_names = [
+        p.get("product_name") for p in passport_products if p.get("product_name")
+    ]
+    if not passport_names:
+        return None
+
+    provider = _resolve_llm_provider(extraction_backend)
+    headers = {
+        "Authorization": f"Bearer {provider.api_key}",
+        "Content-Type": "application/json",
+    }
+    system_message = (
+        "Тебе дано название изделия из технического задания и список названий "
+        "изделий из паспорта продукции. Определи, какое из названий паспорта "
+        "обозначает ТО ЖЕ САМОЕ физическое изделие, что и название из ТЗ (тип "
+        "изделия при этом значения не имеет — сравнивай только совпадает ли "
+        "конкретное наименование/обозначение модели). Если ни одно название "
+        "паспорта не соответствует — верни null.\n\n"
+        "Верни JSON: {\"passport_name\": \"...\"} или {\"passport_name\": null}."
+    )
+    payload = {
+        "model": provider.model,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"tz_product_name": tz_product_name, "passport_product_names": passport_names},
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        with httpx.Client(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
+            resp = client.post(
+                f"{provider.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        parsed = _extract_json(content)
+    except Exception:
+        logger.warning(
+            "resolve_target_product_name: LLM call failed, falling back",
+            exc_info=True,
+            extra={"step": "compare_target_product_error"},
+        )
+        return None
+
+    resolved_name = parsed.get("passport_name") if isinstance(parsed, dict) else None
+    if not isinstance(resolved_name, str) or not resolved_name.strip():
+        return None
+    return next(
+        (p for p in passport_products if p.get("product_name") == resolved_name), None
+    )
 
 
 # Слова, которые документы добавляют к названию характеристики, не меняя её
@@ -790,51 +936,18 @@ def _compare_product_pair(
     return items
 
 
-def _mark_target_model_items(
-    items: list[dict], tz_products: list[dict], passport_products: list[dict]
-) -> list[dict]:
-    """Проставляет is_target_model у каждой строки сравнения.
+def _mark_target_model_items(items: list[dict]) -> list[dict]:
+    """Проставляет is_target_model=True у каждой строки сравнения.
 
-    Сравнение возвращает строки по ВСЕМ моделям паспорта, а UI по умолчанию
-    показывает только ту, которую запросил пользователь (плюс «Общее»). Но
-    название модели в ТЗ и в паспорте пишется по-разному ('КС 50-110/4' vs
-    '1Кс50-110'), поэтому сопоставлять их строкой нельзя — используем
-    _models_match (числовое ядро типоразмера).
-
-    True  — строка относится к целевой модели ИЛИ к общим характеристикам
-            («Общее» — они применимы к любой модели, поэтому показываются всегда);
-    False — строка относится к другой модели каталога.
-    Если целевая модель не задана или не нашлась в паспорте — помечаем все
-    строки True, чтобы UI ничего не скрыл (лучше показать лишнее, чем спрятать
-    единственные найденные данные)."""
-    target_models = [
-        p.get("product_model")
-        for p in tz_products
-        if _normalize_model(p.get("product_model"))
-    ]
-    unique_targets = {_normalize_model(m) for m in target_models}
-    if len(unique_targets) != 1:
-        for item in items:
-            item["is_target_model"] = True
-        return items
-
-    target = target_models[0]
-    # Имена изделий паспорта, чей код модели совпал с целевым.
-    matched_names = {
-        p.get("product_name") or "Неизвестное изделие"
-        for p in passport_products
-        if _models_match(target, p.get("product_model"))
-    }
-    if not matched_names:
-        for item in items:
-            item["is_target_model"] = True
-        return items
-
+    Раньше сравнение возвращало строки по ВСЕМ моделям паспорта сразу, и
+    is_target_model отличал строку запрошенной пользователем модели от строк
+    остальных моделей каталога (UI по умолчанию показывал только целевую).
+    Теперь сравниваются ровно два уже выбранных изделия (см.
+    _select_comparison_pair) — различать модели внутри результата больше не
+    нужно, поле остаётся только для обратной совместимости контракта с
+    api-gateway/фронтендом."""
     for item in items:
-        product_name = item.get("product_name") or "Неизвестное изделие"
-        item["is_target_model"] = (
-            product_name in matched_names or product_name == "Общее"
-        )
+        item["is_target_model"] = True
     return items
 
 
@@ -995,20 +1108,20 @@ def _resolve_char_name_aliases(
     aliases: dict[str, list[str]] = {}
 
     # Пары "ТЗ-модель -> её паспорт-модели" через уже существующий
-    # _models_match (числовое ядро типоразмера) — та же логика, что строит
-    # пары продуктов в _build_comparison_items (_pair_products_by_model), но
-    # здесь идём от каждой ТЗ-модели ко ВСЕМ подходящим паспорт-моделям (не
-    # 1:1) — паспорт мог не разложить характеристики по вариантам, тогда
-    # relevant-паспорт-имена размазаны по нескольким продуктам с тем же
-    # числовым ядром.
+    # _models_match (числовое ядро типоразмера). Вызывающая сторона
+    # (_build_comparison_items_with_aliases) сейчас всегда передаёт ровно
+    # один продукт с каждой стороны — уже выбранную пару (см.
+    # _select_comparison_pair) — но эта функция остаётся общей и на случай
+    # вызова с несколькими продуктами не отбрасывает лишнее: идёт от каждой
+    # ТЗ-модели ко ВСЕМ подходящим паспорт-моделям (не 1:1) — паспорт мог не
+    # разложить характеристики по вариантам, тогда relevant-паспорт-имена
+    # размазаны по нескольким продуктам с тем же числовым ядром.
     #
     # Если у ТЗ-продукта нет числового совпадения (напр. ТЗ называет изделие
     # обозначением заказчика "НП-1" без типоразмера, а паспорт — маркой
     # производителя "КМХ (В 6,45) 50-50..." — коды физически никак не
     # пересекаются, но это ОДНО И ТО ЖЕ изделие, просто у сторон разные
-    # системы именования) и ТЗ-продуктов немного (типичная ветка "1 ТЗ : N
-    # паспорт" в _build_comparison_items уже сравнивает такой ТЗ-продукт со
-    # ВСЕМИ паспорт-продуктами без разбора кода) — берём тоже ВСЕ паспорт-
+    # системы именования) и ТЗ-продуктов немного — берём тоже ВСЕ паспорт-
     # продукты кандидатами, а не молча падаем в слабый групповой fallback
     # ниже (реальный случай, где это сломало сопоставление: ТЗ="НП-1" без
     # product_model, паспорт из двух КМХ-моделей — model_pairs было бы
@@ -1297,10 +1410,14 @@ def _apply_prefix_fallback_aliases(aliases: dict[str, list[str]]) -> None:
 
 
 def _build_comparison_items_with_aliases(
-    tz_data: dict, passport_data: dict, extraction_backend: str | None = None
+    tz_data: dict,
+    passport_data: dict,
+    extraction_backend: str | None = None,
+    tz_product_model: str | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
-    """Обёртка над _build_comparison_items, которая заодно отдаёт наружу
-    aliases (normalized_name -> canonical_key) — нужно api-gateway, чтобы
+    """Выбирает пару изделий (см. _select_comparison_pair) и строит по ней
+    строки сравнения, заодно отдавая наружу aliases (normalized_name ->
+    canonical_key) — нужно api-gateway, чтобы
     характеристики ТЗ в document_characteristics (панель "как есть в
     документе") связывались с той же строкой сравнения, что и одноимённый
     (по смыслу) синоним где-то в документе (см. обсуждение с пользователем:
@@ -1315,197 +1432,23 @@ def _build_comparison_items_with_aliases(
     нескольких группах (диапазон паспорта -> два ТЗ-требования, см.
     _build_char_map) — api-gateway использует этот ключ как единственный
     идентификатор связи "характеристика документа -> строка сравнения",
-    и two ключа на одно и то же сырое имя documentа сломали бы эту связь."""
-    tz_products = _normalize_products(tz_data)
-    passport_products = _normalize_products(passport_data)
-    aliases = _resolve_char_name_aliases(tz_products, passport_products, extraction_backend)
-    items = _build_comparison_items(tz_data, passport_data, aliases)
+    и два ключа на одно и то же сырое имя документа сломали бы эту связь."""
+    tz_products = _merge_general_into_products(_normalize_products(tz_data))
+    passport_products = _merge_general_into_products(_normalize_products(passport_data))
+    tz_product, passport_product = _select_comparison_pair(
+        tz_products, passport_products, tz_product_model, extraction_backend
+    )
+    if tz_product is None or passport_product is None:
+        return [], {}
+
+    aliases = _resolve_char_name_aliases(
+        [tz_product], [passport_product], extraction_backend
+    )
+    items = _mark_target_model_items(
+        _compare_product_pair(tz_product, passport_product, aliases)
+    )
     primary_aliases = {name: keys[0] for name, keys in aliases.items() if keys}
     return items, primary_aliases
-
-
-def _build_comparison_items(
-    tz_data: dict, passport_data: dict, aliases: dict[str, list[str]] | None = None
-) -> list[dict]:
-    tz_products = _normalize_products(tz_data)
-    passport_products = _normalize_products(passport_data)
-    # Изделия паспорта НЕ фильтруются по целевой модели: сравниваем все модели,
-    # которые описывает паспорт, и сохраняем результат целиком (product_name у
-    # каждой строки — см. ComparisonRow.product_name). Отбор нужной модели
-    # делает UI при отображении, поэтому данные по остальным моделям должны
-    # дойти до него, а не отбрасываться здесь. Раньше тут вызывался
-    # _filter_products_by_target_model, из-за чего характеристики прочих
-    # моделей терялись безвозвратно и группировать было нечего.
-
-    # Один-к-одному: по одному изделию с каждой стороны — сравниваем их как пару,
-    # НЕ завязываясь на совпадение product_name (в паспорте оно часто пустое →
-    # иначе ТЗ и паспорт попадают в разные «изделия» и каждая характеристика
-    # дублируется: один ряд только с ТЗ, второй только с паспортом).
-    if len(tz_products) == 1 and len(passport_products) == 1:
-        return _mark_target_model_items(
-            _compare_product_pair(tz_products[0], passport_products[0], aliases),
-            tz_products,
-            passport_products,
-        )
-
-    tz_map = _build_char_map(tz_products, aliases)
-    passport_map = _build_char_map(passport_products, aliases)
-
-    tz_product_chars = {
-        item.get("product_name") or "Неизвестное изделие": item.get("characteristics", [])
-        for item in tz_products
-    }
-    passport_product_chars = {
-        item.get("product_name") or "Неизвестное изделие": item.get("characteristics", [])
-        for item in passport_products
-    }
-
-    items: list[dict] = []
-
-    if len(tz_products) == 1 and len(passport_products) > 1:
-        tz_baseline = tz_products[0]
-        tz_baseline_name = tz_baseline.get("product_name") or "Неизвестное изделие"
-        tz_chars_map = tz_map.get(tz_baseline_name, {})
-        tz_chars_list = tz_product_chars.get(tz_baseline_name, [])
-        for passport_product in passport_products:
-            product_name = passport_product.get("product_name") or "Неизвестное изделие"
-            passport_chars_map = passport_map.get(product_name, {})
-            passport_chars_list = passport_product_chars.get(product_name, [])
-            ordered_char_names = _ordered_characteristics(
-                tz_chars_list, passport_chars_list, aliases
-            )
-            for char_key, char_name in ordered_char_names:
-                tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
-                passport_candidates = passport_chars_map.get(char_key, [])
-                passport_entry = _primary_entry(passport_candidates)
-                items.append(
-                    {
-                        "product_name": product_name,
-                        "tz_product_name": tz_baseline_name,
-                        "characteristic": char_name,
-                        "tz_value": tz_entry.get("value"),
-                        "passport_value": passport_entry.get("value"),
-                        "tz_references": tz_entry.get("references", []),
-                        "passport_references": passport_entry.get("references", []),
-                        "passport_value_candidates": passport_candidates,
-                    }
-                )
-        return _mark_target_model_items(items, tz_products, passport_products)
-
-    if len(passport_products) == 1 and len(tz_products) > 1:
-        # Паспорт извлечён как единый продукт (напр. backend yandex_vision_ocr
-        # не смог определить variant для каждой характеристики — несколько
-        # исполнений изделия описаны в паспорте одной таблицей без явного
-        # разделения по моделям), а ТЗ разбито на несколько именованных
-        # моделей. Точное совпадение product_name (общая ветка ниже) не
-        # находит НИЧЕГО — паспортный продукт называется иначе, чем любая
-        # модель ТЗ. Симметрично уже существующей ветке выше ("1 ТЗ-продукт :
-        # N паспорт-продуктов"): сравниваем единственный паспортный продукт
-        # со всеми ТЗ-продуктами по очереди, не завязываясь на имя.
-        passport_baseline = passport_products[0]
-        passport_baseline_name = passport_baseline.get("product_name") or "Неизвестное изделие"
-        passport_chars_map = passport_map.get(passport_baseline_name, {})
-        passport_chars_list = passport_product_chars.get(passport_baseline_name, [])
-        for tz_product in tz_products:
-            product_name = tz_product.get("product_name") or "Неизвестное изделие"
-            tz_chars_map = tz_map.get(product_name, {})
-            tz_chars_list = tz_product_chars.get(product_name, [])
-            ordered_char_names = _ordered_characteristics(
-                tz_chars_list, passport_chars_list, aliases
-            )
-            for char_key, char_name in ordered_char_names:
-                tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
-                passport_candidates = passport_chars_map.get(char_key, [])
-                passport_entry = _primary_entry(passport_candidates)
-                items.append(
-                    {
-                        "product_name": product_name,
-                        "tz_product_name": product_name,
-                        "characteristic": char_name,
-                        "tz_value": tz_entry.get("value"),
-                        "passport_value": passport_entry.get("value"),
-                        "tz_references": tz_entry.get("references", []),
-                        "passport_references": passport_entry.get("references", []),
-                        "passport_value_candidates": passport_candidates,
-                    }
-                )
-        return _mark_target_model_items(items, tz_products, passport_products)
-
-    # "Общее" в ТЗ — характеристики без привязки к конкретной модели изделия
-    # (напр. "Максимальный расход" в самом верху ТЗ, до таблицы моделей). В
-    # паспорте с несколькими изделиями такая характеристика физически лежит
-    # ВНУТРИ каждой модели (др. значение на модель), а не в паспортном
-    # "Общее" — точное совпадение по имени изделия её не находит, хотя
-    # данные в документе есть (см. разбор пользователя: "Максимальный
-    # расход/напор" нашлись в паспорте по всем 6 моделям, но 0 совп. в UI).
-    # Фолбэк: если у ТЗ-продукта "Общее" характеристика не нашлась в
-    # одноимённом паспортном продукте — ищем её по ВСЕМ остальным паспортным
-    # изделиям и собираем все найденные значения как кандидатов (та же идея,
-    # что уже применяется для нескольких упоминаний внутри одного изделия).
-    tz_general = next(
-        (p for p in tz_products if p.get("product_name") == "Общее"), None
-    )
-    passport_general = next(
-        (p for p in passport_products if p.get("product_name") == "Общее"), None
-    )
-    tz_products_by_model = [p for p in tz_products if p is not tz_general]
-    passport_products_by_model = [p for p in passport_products if p is not passport_general]
-
-    # Пары строятся по _models_match (числовое ядро типоразмера), а НЕ по
-    # точному product_name (см. docstring _pair_products_by_model) — ТЗ и
-    # паспорт почти всегда называют одну и ту же модель разными словами
-    # ("Unipump Насос шламовый USP4A 100-15-9" vs "Шламовый насос USP4A
-    # 100-15-9"), и раньше такие пары никогда не встречались под одним ключом
-    # словаря — весь набор характеристик паспорта был недостижим для
-    # соответствующей модели ТЗ.
-    product_pairs = _pair_products_by_model(tz_products_by_model, passport_products_by_model)
-    if tz_general is not None or passport_general is not None:
-        product_pairs.append((tz_general, passport_general))
-
-    for tz_product, passport_product in product_pairs:
-        # Строка сравнения помечается именем изделия с той стороны, что есть
-        # (обычно паспорт — там формулировка модели точнее числового кода);
-        # если пара односторонняя — используем то, что доступно.
-        product_name = (
-            (passport_product or {}).get("product_name")
-            or (tz_product or {}).get("product_name")
-            or "Неизвестное изделие"
-        )
-        tz_product_name = (tz_product or {}).get("product_name") or product_name
-        tz_key = (tz_product or {}).get("product_name") or "Неизвестное изделие"
-        passport_key = (passport_product or {}).get("product_name") or "Неизвестное изделие"
-        tz_chars_map = tz_map.get(tz_key, {})
-        passport_chars_map = passport_map.get(passport_key, {})
-        tz_chars_list = tz_product_chars.get(tz_key, [])
-        passport_chars_list = passport_product_chars.get(passport_key, [])
-        ordered_char_names = _ordered_characteristics(
-            tz_chars_list, passport_chars_list, aliases
-        )
-
-        for char_key, char_name in ordered_char_names:
-            tz_entry = _primary_entry(tz_chars_map.get(char_key, []))
-            passport_candidates = passport_chars_map.get(char_key, [])
-            if not passport_candidates and tz_product is tz_general:
-                for other_product_name, other_chars_map in passport_map.items():
-                    if other_product_name == passport_key:
-                        continue
-                    passport_candidates = passport_candidates + other_chars_map.get(
-                        char_key, []
-                    )
-            passport_entry = _primary_entry(passport_candidates)
-            items.append(
-                {
-                    "product_name": product_name,
-                    "tz_product_name": tz_product_name,
-                    "characteristic": char_name,
-                    "tz_value": tz_entry.get("value"),
-                    "passport_value": passport_entry.get("value"),
-                    "tz_references": tz_entry.get("references", []),
-                    "passport_references": passport_entry.get("references", []),
-                    "passport_value_candidates": passport_candidates,
-                }
-            )
-    return _mark_target_model_items(items, tz_products, passport_products)
 
 
 def _attach_evidence_to_comparison(item: dict[str, Any], comparison: dict[str, Any]) -> dict[str, Any]:
@@ -1603,30 +1546,29 @@ class _LlmProvider(NamedTuple):
 
 
 def _resolve_llm_provider(extraction_backend: str | None) -> _LlmProvider:
-    """Сравнение всегда идёт через Yandex AI Studio (qwen3-235b), независимо
-    от backend'а извлечения — единый провайдер для всего сравнения ТЗ↔паспорт.
-    AI Tunnel остаётся только аварийным fallback'ом, если YANDEX_API_KEY не
-    задан (без ключа Yandex-запрос гарантированно вернёт 401, а сравнение
-    упадёт целиком — AI Tunnel даёт корректный результат, поэтому деградируем
-    к нему вместо отказа)."""
-    if settings.YANDEX_API_KEY:
+    """Сравнение всегда идёт через AI Tunnel — быстрее Yandex AI Studio на
+    том же классе моделей (Yandex — таймауты в 20 минут, reasoning-режим
+    qwen3 через Yandex занимал 200-600 сек на чанк даже при штатной работе,
+    см. обсуждение с пользователем). Yandex остаётся только аварийным
+    fallback'ом, если OPENROUTER_API_KEY не задан."""
+    if settings.OPENROUTER_API_KEY:
         return _LlmProvider(
-            name="yandex_ai_studio",
-            base_url=settings.YANDEX_BASE_URL,
-            api_key=settings.YANDEX_API_KEY,
-            # AI Studio требует полный идентификатор вида
-            # gpt://<folder>/<model>, короткое имя не принимается.
-            model=f"gpt://{settings.YANDEX_FOLDER_ID}/{settings.YANDEX_COMPARE_MODEL}",
+            name="ai_tunnel",
+            base_url=settings.OPENROUTER_BASE_URL,
+            api_key=settings.OPENROUTER_API_KEY,
+            model=settings.AITUNNEL_COMPARE_MODEL or settings.OPENROUTER_MODEL,
         )
     logger.warning(
-        "compare: YANDEX_API_KEY is not set, falling back to AI Tunnel",
+        "compare: OPENROUTER_API_KEY is not set, falling back to Yandex AI Studio",
         extra={"step": "compare_provider_fallback"},
     )
     return _LlmProvider(
-        name="ai_tunnel",
-        base_url=settings.OPENROUTER_BASE_URL,
-        api_key=settings.OPENROUTER_API_KEY,
-        model=settings.AITUNNEL_COMPARE_MODEL or settings.OPENROUTER_MODEL,
+        name="yandex_ai_studio",
+        base_url=settings.YANDEX_BASE_URL,
+        api_key=settings.YANDEX_API_KEY,
+        # AI Studio требует полный идентификатор вида
+        # gpt://<folder>/<model>, короткое имя не принимается.
+        model=f"gpt://{settings.YANDEX_FOLDER_ID}/{settings.YANDEX_COMPARE_MODEL}",
     )
 
 
@@ -1823,11 +1765,14 @@ def _repair_json(raw_text: str, schema: dict, extraction_backend: str | None = N
 
 
 def compare_json(
-    tz_data: dict, passport_data: dict, extraction_backend: str | None = None
+    tz_data: dict,
+    passport_data: dict,
+    extraction_backend: str | None = None,
+    tz_product_model: str | None = None,
 ) -> dict:
     started_at = time.monotonic()
     items, char_name_aliases = _build_comparison_items_with_aliases(
-        tz_data, passport_data, extraction_backend
+        tz_data, passport_data, extraction_backend, tz_product_model
     )
     logger.info(
         "compare_json started: %d comparison items", len(items),
@@ -1889,7 +1834,7 @@ def compare_json(
                         "passport_value": missing_item.get("passport_value"),
                         "tz_quote": None,
                         "passport_quote": None,
-                        "is_match": False,
+                        "status": "not_found",
                         "note": "Сравнение не было возвращено моделью.",
                     }
                 )
@@ -1919,10 +1864,10 @@ def compare_json(
                 "product_name"
             )
             comparisons[idx]["is_target_model"] = item.get("is_target_model", True)
-            # Если значения однозначно совпадают, всегда ставим is_match=True,
+            # Если значения однозначно совпадают, всегда ставим status="confident",
             # независимо от того, что вернула LLM
             if _values_clearly_match(item.get("tz_value"), item.get("passport_value")):
-                comparisons[idx]["is_match"] = True
+                comparisons[idx]["status"] = "confident"
             # LLM иногда пишет note вида «характеристика отсутствует в паспорте»,
             # хотя passport_value/tz_value в этой же строке непустые (взяты из
             # извлечения документа, а не от LLM) — такой note противоречит данным
@@ -1964,9 +1909,9 @@ def compare_json(
             summaries.append(summary_text)
 
     match_value = all(
-        item.get("is_match") is True for item in all_comparisons
+        item.get("status") == "confident" for item in all_comparisons
     )
-    mismatches = [c for c in all_comparisons if c.get("is_match") is not True]
+    mismatches = [c for c in all_comparisons if c.get("status") != "confident"]
     summary_text = " ".join(summaries).strip()
     result_payload = {
         "match": match_value,
