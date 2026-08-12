@@ -61,7 +61,11 @@ services:
       # Чекпоинт по страницам + очередь job'ов — см. job_queue.py. redis
       # объявлен в основном docker-compose.yml, доступен по имени контейнера
       # в той же default-сети.
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      # Пароль в URL: redis поднят с --requirepass (см. docker-compose.yml,
+      # инцидент 2026-08-12). Дефолт здесь должен совпадать с REDIS_PASSWORD
+      # в env/.env — этот файл интерполируется из shell-окружения, а не из
+      # env/.env, поэтому значение продублировано, а не подставлено.
+      - REDIS_URL=${REDIS_URL:-redis://:TITIzshx0qpbDiuTeNNHvXvHmTlFOdYkWXmHS6_IeBo@redis:6379/0}
       - EXTRACTION_CALLBACK_URL=${EXTRACTION_CALLBACK_URL:-http://api-gateway:8000/internal/extraction-callback}
       # Сколько документов обрабатываются одновременно ВНУТРИ сервиса —
       # страницы этих документов дальше делят YANDEX_VISION_CONCURRENCY.

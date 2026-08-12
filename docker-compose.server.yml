@@ -48,6 +48,19 @@ services:
     ports: !reset []
     restart: unless-stopped
 
+  # Redis публиковался на 0.0.0.0:6379 без пароля (единственный сервис, который
+  # забыли закрыть здесь наряду с postgres/minio) — 2026-08-12 этим
+  # воспользовались: извне выполнили REPLICAOF на чужой мастер (175.24.232.83),
+  # из-за чего Redis стал read-only репликой и paddleocr-vl-service начал
+  # падать с 500 на записи job-метаданных; в базу были записаны ключи
+  # backup1..4 с cron-payload'ами (curl/wget ... | sh с en2an.top и
+  # 45.83.123.29) — заготовка под RCE через подмену dir/dbfilename и SAVE.
+  # Доступ снаружи хоста приложению не нужен: все клиенты Redis
+  # (paddleocr-vl-service) ходят по внутренней сети compose.
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+
   frontend:
     ports: !override
       - "80:80"
