@@ -172,7 +172,7 @@ def _normalize_products(data: dict) -> list[dict]:
                 )
         normalized.append(
             {
-                "product_name": name or "Неизвестное изделие",
+                "product_name": name or _UNKNOWN_PRODUCT_NAME,
                 "product_model": model,
                 "characteristics": norm_chars,
             }
@@ -181,6 +181,23 @@ def _normalize_products(data: dict) -> list[dict]:
 
 
 _GENERAL_PRODUCT_NAME = "Общее"
+
+# Плейсхолдер, которым _normalize_products заменяет пустое имя изделия.
+# Важно отличать его от настоящего имени: он непустой, поэтому обычная
+# проверка через `or` считает его валидным значением и он может «победить»
+# реальное имя модели с другой стороны сравнения.
+_UNKNOWN_PRODUCT_NAME = "Неизвестное изделие"
+
+
+def _real_product_name(product: dict | None) -> str | None:
+    """Имя изделия, если оно настоящее, а не плейсхолдер-заглушка."""
+    name = (product or {}).get("product_name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not name or name == _UNKNOWN_PRODUCT_NAME:
+        return None
+    return name
 
 
 def _merge_general_into_products(products: list[dict]) -> list[dict]:
@@ -481,7 +498,7 @@ def _build_char_map(
     называлась так же, как в документе."""
     result: dict[str, dict[str, list[dict]]] = {}
     for product in products:
-        product_name = product.get("product_name") or "Неизвестное изделие"
+        product_name = product.get("product_name") or _UNKNOWN_PRODUCT_NAME
         result.setdefault(product_name, {})
         for item in product.get("characteristics", []):
             name = item.get("name")
@@ -931,10 +948,20 @@ def _compare_product_pair(
     характеристики по имени. Используется, когда с каждой стороны ровно одно
     изделие — тогда название изделия не важно (в паспорте оно часто пустое),
     и сравнивать надо напрямую, иначе характеристики задваиваются."""
+    # Имя изделия для строк сравнения. Паспорт приоритетнее ТЗ: там модель
+    # названа точнее («ДЖАМБО 60/35»), тогда как ТЗ часто описывает изделие
+    # текстом без отдельного product_name.
+    #
+    # Плейсхолдер _UNKNOWN_PRODUCT_NAME здесь именно ОТБРАСЫВАЕТСЯ, а не
+    # используется как значение: _normalize_products подставляет его вместо
+    # пустого имени раньше по пайплайну, поэтому простое `or` не сработало бы
+    # — строка непустая, и «Неизвестное изделие» из ТЗ побеждало реальное имя
+    # модели из паспорта (см. разбор анализа b6d52a89: все 23 строки были
+    # помечены «Неизвестное изделие», хотя паспорт распознал все 5 моделей).
     product_name = (
-        tz_product.get("product_name")
-        or passport_product.get("product_name")
-        or "Неизвестное изделие"
+        _real_product_name(passport_product)
+        or _real_product_name(tz_product)
+        or _UNKNOWN_PRODUCT_NAME
     )
     tz_chars = tz_product.get("characteristics", []) or []
     passport_chars = passport_product.get("characteristics", []) or []
@@ -1692,12 +1719,22 @@ def _attach_evidence_to_comparison(item: dict[str, Any], comparison: dict[str, A
         value=item.get("passport_value"),
         characteristic_name=char_name,
     )
-    # Документ может упоминать характеристику несколько раз с разными (в т.ч.
-    # противоречивыми) значениями — passport_value/passport_evidence выше несут
-    # только ПЕРВОЕ упоминание (для обратной совместимости с местами кода,
-    # которые понимают одно значение). Здесь строим evidence на КАЖДОГО
-    # кандидата, чтобы фронтенд мог показать и подсветить все варианты.
-    passport_candidates = item.get("passport_value_candidates") or []
+    # У характеристики остаётся РОВНО ОДНО значение из паспорта — первое
+    # упоминание, то же самое, что уже лежит в passport_value/passport_evidence.
+    #
+    # Раньше сюда попадали все найденные упоминания, и фронтенд показывал
+    # переключатель вариантов. На практике это давало не пользу, а шум: на
+    # одну характеристику приходило по 2-3 «кандидата», часто с одинаковым
+    # значением из разных мест документа, и таблица становилась нечитаемой
+    # (см. разбор анализа b6d52a89 — «Напряжение» с тремя кандидатами при
+    # одном фактическом значении 220±10%).
+    #
+    # Список (а не одиночное поле) сохранён намеренно: контракт API, колонка
+    # comparison_row.passport_value_candidates и типы фронтенда не меняются,
+    # а UI сам скрывает переключатель, пока кандидат один (условие
+    # candidates.length > 1). Чтобы вернуть множественные значения, достаточно
+    # снять срез [:1] ниже.
+    passport_candidates = (item.get("passport_value_candidates") or [])[:1]
     candidates_payload: list[dict[str, Any]] = []
     for candidate in passport_candidates:
         if not isinstance(candidate, dict):
