@@ -359,9 +359,11 @@ def _status_key(status: str) -> str:
         "analyzing_data": "in-progress",
         "extracting_passport": "in-progress",
         "tz_review": "review",
-        # Тот же ключ, что у tz_review: для фронтенда это такая же пауза с
-        # ожиданием решения пользователя, просто вопрос другой.
-        "product_selection": "review",
+        # Отдельный ключ, а не общий с tz_review: пауза действительно похожая
+        # (ждём решения пользователя), но вопрос другой — какое изделие
+        # паспорта сравнивать. С общим ключом интерфейс подписывал этот шаг
+        # «Проверка ТЗ», и переход к нему выглядел как откат назад.
+        "product_selection": "product-selection",
         "ready": "ready",
         "failed": "error",
     }
@@ -513,9 +515,9 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
                 "passport_id": str(passport.id) if passport else "",
                 "status": _status_label(status),
                 "status_key": _status_key(status),
-                # Сырой статус — фронтенду нужно отличать этапы, у которых
-                # одинаковый status_key: и tz_review, и product_selection это
-                # "review" (пауза с ожиданием пользователя), но действие разное.
+                # Сырой статус из БД — на случай, если фронтенду нужен этап
+                # точнее, чем даёт status_key (тот огрубляет промежуточные
+                # стадии обработки до одного "in-progress").
                 "status_raw": status,
                 "extraction_backend": extraction_backend,
                 "extraction_backend_label": extraction_backend_label(extraction_backend),
@@ -1063,7 +1065,18 @@ async def continue_tz_review(
 ):
     analysis_uuid = parse_uuid(analysis_id)
     analysis = await _ensure_analysis_owner(analysis_uuid, db, current_user)
-    if analysis.status in {"ready", "analyzing_data", "extracting_passport"}:
+    # Повторный вызов на уже продвинувшемся анализе — ничего не делаем и
+    # отдаём фактический статус. product_selection здесь обязателен: анализ
+    # доходит до него, когда паспорт уже извлечён и ждёт выбора изделия, и
+    # без него второй вызов проваливался дальше, не находил файл паспорта
+    # для новой задачи и возвращал "extracting_passport", хотя ничего не
+    # запускал — в интерфейсе это выглядело как откат к обработке.
+    if analysis.status in {
+        "ready",
+        "analyzing_data",
+        "extracting_passport",
+        "product_selection",
+    }:
         return {"ok": True, "status": analysis.status}
 
     extraction_row, _ = await _get_tz_review_source(analysis_uuid, db)
@@ -1131,11 +1144,16 @@ async def continue_tz_review(
                 passport_file.storage_path,
                 passport_file.storage_url,
             )
-        await db.execute(
-            update(Analysis)
-            .where(Analysis.id == analysis_uuid)
-            .values(status="extracting_passport", updated_at=datetime.utcnow())
-        )
+        # Статус меняем ТОЛЬКО если задача извлечения реально создана.
+        # Иначе (паспорт уже извлечён, задача существует) анализ откатывался
+        # бы в "обработку" с уже пройденного шага — например из
+        # product_selection, где он ждёт выбора изделия.
+        if passport_job is not None:
+            await db.execute(
+                update(Analysis)
+                .where(Analysis.id == analysis_uuid)
+                .values(status="extracting_passport", updated_at=datetime.utcnow())
+            )
 
     await db.commit()
 
@@ -1155,11 +1173,14 @@ async def continue_tz_review(
             ],
             task_id=job_id,
         )
-    else:
-        # Паспорт уже извлечён (повторное подтверждение ТЗ) — просто пробуем
-        # запустить сравнение; если рано, try_start_comparison тихо выйдет.
-        try_start_comparison.apply_async(args=[str(analysis_uuid)])
-    return {"ok": True, "status": "extracting_passport"}
+        return {"ok": True, "status": "extracting_passport"}
+    # Паспорт уже извлечён (повторное подтверждение ТЗ) — просто пробуем
+    # запустить сравнение; если рано, try_start_comparison тихо выйдет.
+    # Отдаём ФАКТИЧЕСКИЙ статус: сообщать "extracting_passport", когда
+    # извлечение не запускалось, значит показывать пользователю шаг назад.
+    try_start_comparison.apply_async(args=[str(analysis_uuid)])
+    await db.refresh(analysis)
+    return {"ok": True, "status": analysis.status}
 
 
 @router.get("/analyses/{analysis_id}/product-selection")
