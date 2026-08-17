@@ -1410,6 +1410,7 @@ def _resolve_char_name_aliases(
 
     _resolve_alias_chains(aliases)
     _apply_prefix_fallback_aliases(aliases)
+    _split_aliases_conflicting_by_value(aliases, tz_products)
 
     logger.info(
         "resolve_char_name_aliases: %d model pair(s), %d unmatched TZ product(s), "
@@ -1421,6 +1422,77 @@ def _resolve_char_name_aliases(
     )
     _log_alias_pairs(aliases, tz_products, passport_products)
     return aliases
+
+
+def _split_aliases_conflicting_by_value(
+    aliases: dict[str, list[str]],
+    tz_products: list[dict],
+) -> None:
+    """Разъединяет имена ТЗ, ошибочно слитые алиасингом в один canonical-ключ.
+
+    Проверка чисто по данным, без LLM: одна физическая величина изделия не
+    может иметь в одном ТЗ два РАЗНЫХ значения. Если такое случилось —
+    алиасинг объединил разные характеристики, и каждая должна остаться
+    самостоятельной строкой сравнения.
+
+    Реальный случай (анализ 1f053470): «Мощность» = 132 кВт и «Номинальная
+    мощность - P2» = 160 кВт получили общий ключ «мощность». В таблице
+    осталась одна строка вместо двух, а интерфейс, который связывает
+    характеристику документа со строкой сравнения по этому ключу, при клике
+    по «Мощность» перебрасывал на «Номинальную мощность» — вторая запись
+    затирала первую в Map.
+
+    Промпт алиасинга такое запрещает прямо («номинальный» назван модификатором,
+    меняющим величину), но LLM инструкцию нарушает; здесь — детерминированная
+    страховка, которая ловит всю категорию, а не отдельные формулировки.
+
+    Мутирует aliases на месте. Имена, оставшиеся без конфликта, не трогаются:
+    объединение по синонимам (ради которого алиасинг и нужен) сохраняется."""
+    # normalized_name -> непустые значения этого имени в ТЗ
+    values_by_name: dict[str, set[str]] = {}
+    for product in tz_products:
+        for item in product.get("characteristics", []) or []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            value = _normalize_value_for_match(item.get("value"))
+            if not value:
+                continue
+            values_by_name.setdefault(_normalize_char_name(name), set()).add(value)
+
+    # canonical_key -> имена ТЗ, отображённые в него
+    names_by_key: dict[str, list[str]] = {}
+    for name_key, canonical_keys in aliases.items():
+        if name_key not in values_by_name:
+            continue  # имя паспорта: конфликт значений проверяем только по ТЗ
+        for canonical_key in canonical_keys:
+            names_by_key.setdefault(canonical_key, []).append(name_key)
+
+    for canonical_key, name_keys in names_by_key.items():
+        if len(name_keys) < 2:
+            continue
+        # Конфликт только если значения РАЗНЫЕ. Одинаковые значения у двух
+        # формулировок — наоборот подтверждение, что это одна величина.
+        distinct_values = {
+            value for name_key in name_keys for value in values_by_name.get(name_key, set())
+        }
+        if len(distinct_values) < 2:
+            continue
+        # Каждое имя становится собственным ключом. Само имя, совпадающее с
+        # canonical_key, оставляем как есть — иначе строка сравнения потеряла
+        # бы связь с уже построенными парами.
+        for name_key in name_keys:
+            if name_key == canonical_key:
+                continue
+            aliases[name_key] = [name_key]
+        logger.warning(
+            "compare aliases: split %r — %d TZ names merged into it have different "
+            "values in the requirement (%s); each becomes its own comparison row",
+            canonical_key, len(name_keys), sorted(distinct_values)[:4],
+            extra={"step": "compare_char_aliases_value_conflict"},
+        )
 
 
 def _log_alias_pairs(
