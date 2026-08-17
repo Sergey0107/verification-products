@@ -22,7 +22,12 @@ from app.db.models.analysis import ComparisonRow, HiddenCharacteristic, UserEdit
 from app.db.models.users import User
 from app.db.session import get_db
 from app.services.extraction_backends import extraction_backend_label
-from app.tasks import try_start_comparison
+from app.services.extraction_tasks import read_raw_ocr_dump
+from app.services.product_selection import (
+    passport_product_options,
+    resolve_target_product,
+)
+from app.tasks import extract_file, try_start_comparison
 
 router = APIRouter()
 
@@ -35,6 +40,10 @@ class TzReviewDecision(BaseModel):
 
 class TzReviewSaveRequest(BaseModel):
     items: list[TzReviewDecision] = Field(default_factory=list)
+
+
+class ProductSelectionRequest(BaseModel):
+    product_name: str
 
 
 class TzMarkOffset(BaseModel):
@@ -335,6 +344,7 @@ def _status_label(status: str) -> str:
         "analyzing_data": "анализ данных",
         "extracting_passport": "извлечение паспорта",
         "tz_review": "проверка ТЗ",
+        "product_selection": "выбор изделия",
         "ready": "готово",
         "failed": "ошибка",
     }
@@ -349,6 +359,9 @@ def _status_key(status: str) -> str:
         "analyzing_data": "in-progress",
         "extracting_passport": "in-progress",
         "tz_review": "review",
+        # Тот же ключ, что у tz_review: для фронтенда это такая же пауза с
+        # ожиданием решения пользователя, просто вопрос другой.
+        "product_selection": "review",
         "ready": "ready",
         "failed": "error",
     }
@@ -500,6 +513,10 @@ async def build_analysis_items(db: AsyncSession, user: User | None = None) -> li
                 "passport_id": str(passport.id) if passport else "",
                 "status": _status_label(status),
                 "status_key": _status_key(status),
+                # Сырой статус — фронтенду нужно отличать этапы, у которых
+                # одинаковый status_key: и tz_review, и product_selection это
+                # "review" (пауза с ожиданием пользователя), но действие разное.
+                "status_raw": status,
                 "extraction_backend": extraction_backend,
                 "extraction_backend_label": extraction_backend_label(extraction_backend),
                 "created_at": _utc_isoformat(created_at),
@@ -1071,17 +1088,170 @@ async def continue_tz_review(
     if not approved_rows:
         raise HTTPException(status_code=400, detail="At least one TZ characteristic must be approved")
 
-    # Паспорт уже поставлен в очередь извлечения сразу после загрузки файлов
-    # (см. files_callback) — не дожидаясь одобрения ТЗ, оба извлечения идут
-    # параллельно. Здесь просто пробуем запустить сравнение: если паспорт уже
-    # извлёкся (обычный случай — извлечение занимает секунды-минуты, а
-    # пользователь может открыть tz_review не сразу), сравнение стартует
-    # прямо сейчас; если ещё нет — try_start_comparison тихо ничего не
-    # делает, и сравнение стартует позже само, когда извлечение паспорта
-    # завершится (см. _finalize_extraction/try_start_comparison в tasks.py).
+    # Паспорт извлекается ЗДЕСЬ, после одобрения ТЗ, а не параллельно с ним
+    # при загрузке файлов. Причина — target_characteristics: одобренные имена
+    # уходят в промпт паспорта контрактом «верни ровно эти имена дословно»,
+    # и только благодаря ему сопоставление ТЗ↔паспорт получается прямым.
+    # При параллельном извлечении этого списка ещё не существует, паспорт
+    # извлекается «вслепую», модель придумывает свои формулировки, и
+    # сопоставление становится вероятностным (замер на ДЖАМБО 60/35: 7 из 15
+    # требований ТЗ доходили до таблицы, при 117 строках мусора в ней).
+    target_characteristics = _review_target_characteristics(
+        approved_rows, analysis.product_model
+    )
+    passport_result = await db.execute(
+        select(FileModel).where(
+            FileModel.analysis_id == analysis_uuid,
+            FileModel.file_type == "passport",
+            FileModel.status == "uploaded",
+        )
+    )
+    passport_file = passport_result.scalars().first()
+
+    passport_job: tuple[str, str, str, str] | None = None
+    if passport_file is not None:
+        stmt = (
+            insert(ExtractionJob)
+            .values(
+                analysis_id=analysis_uuid,
+                file_id=passport_file.id,
+                file_type="passport",
+                status="queued",
+            )
+            .on_conflict_do_nothing(
+                index_elements=["analysis_id", "file_id", "file_type"]
+            )
+            .returning(ExtractionJob.id)
+        )
+        job_id = (await db.execute(stmt)).scalar_one_or_none()
+        if job_id:
+            passport_job = (
+                str(job_id),
+                str(passport_file.id),
+                passport_file.storage_path,
+                passport_file.storage_url,
+            )
+        await db.execute(
+            update(Analysis)
+            .where(Analysis.id == analysis_uuid)
+            .values(status="extracting_passport", updated_at=datetime.utcnow())
+        )
+
     await db.commit()
-    try_start_comparison.apply_async(args=[str(analysis_uuid)])
+
+    if passport_job is not None:
+        job_id, file_id, storage_path, storage_url = passport_job
+        extract_file.apply_async(
+            args=[
+                job_id,
+                str(analysis_uuid),
+                file_id,
+                "passport",
+                storage_path,
+                storage_url,
+                analysis.extraction_backend,
+                target_characteristics,
+                analysis.product_model,
+            ],
+            task_id=job_id,
+        )
+    else:
+        # Паспорт уже извлечён (повторное подтверждение ТЗ) — просто пробуем
+        # запустить сравнение; если рано, try_start_comparison тихо выйдет.
+        try_start_comparison.apply_async(args=[str(analysis_uuid)])
     return {"ok": True, "status": "extracting_passport"}
+
+
+@router.get("/analyses/{analysis_id}/product-selection")
+async def get_product_selection(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Изделия паспорта на выбор, когда автоматика не смогла определить цель.
+
+    Отдаёт пустой список, пока паспорт ещё извлекается: ТЗ доходит до проверки
+    параллельно с паспортом и часто раньше него, поэтому фронтенд опрашивает
+    этот эндпоинт и показывает выбор только когда варианты появились.
+    """
+    analysis_uuid = parse_uuid(analysis_id)
+    analysis = await _ensure_analysis_owner(analysis_uuid, db, current_user)
+
+    passport_row = (
+        await db.execute(
+            select(ExtractionResult).where(
+                ExtractionResult.analysis_id == analysis_uuid,
+                ExtractionResult.file_type == "passport",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if passport_row is None:
+        return {
+            "analysis_id": str(analysis_uuid),
+            "passport_ready": False,
+            "selection_required": False,
+            "selected": analysis.product_model,
+            "options": [],
+        }
+
+    tz_row = (
+        await db.execute(
+            select(ExtractionResult).where(
+                ExtractionResult.analysis_id == analysis_uuid,
+                ExtractionResult.file_type == "tz",
+            )
+        )
+    ).scalar_one_or_none()
+
+    _, options = resolve_target_product(
+        tz_row.payload if tz_row else None,
+        passport_row.payload,
+        analysis.product_model,
+    )
+    return {
+        "analysis_id": str(analysis_uuid),
+        "passport_ready": True,
+        "selection_required": bool(options),
+        "selected": analysis.product_model,
+        "options": options or passport_product_options(passport_row.payload),
+    }
+
+
+@router.post("/analyses/{analysis_id}/product-selection")
+async def select_product(
+    analysis_id: str,
+    payload: ProductSelectionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Фиксирует выбранное пользователем изделие и продолжает пайплайн."""
+    analysis_uuid = parse_uuid(analysis_id)
+    analysis = await _ensure_analysis_owner(analysis_uuid, db, current_user)
+
+    passport_row = (
+        await db.execute(
+            select(ExtractionResult).where(
+                ExtractionResult.analysis_id == analysis_uuid,
+                ExtractionResult.file_type == "passport",
+            )
+        )
+    ).scalar_one_or_none()
+    if passport_row is None:
+        raise HTTPException(status_code=409, detail="Passport is not extracted yet")
+
+    available = {
+        option["name"] for option in passport_product_options(passport_row.payload)
+    }
+    if payload.product_name not in available:
+        raise HTTPException(status_code=400, detail="Unknown product for this passport")
+
+    analysis.product_model = payload.product_name
+    analysis.updated_at = datetime.utcnow()
+    await db.commit()
+
+    try_start_comparison.apply_async(args=[str(analysis_uuid)])
+    return {"ok": True, "selected": payload.product_name}
 
 
 @router.get("/extraction-backends")
@@ -1153,6 +1323,45 @@ async def get_extraction(
     if row is None:
         raise HTTPException(status_code=404, detail="Not found")
     return JSONResponse(content=row.payload)
+
+
+@router.get("/analyses/{analysis_id}/raw-json/{file_type}")
+async def download_raw_json(
+    analysis_id: str,
+    file_type: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Файл для кнопки "Скачать ТЗ/паспорт json-ы": сырой OCR+LLM-structuring
+    ответ paddleocr-vl-service (до конвертации в products, если ещё
+    сохранён на диске — см. read_raw_ocr_dump) вместе с уже сохранённым
+    ExtractionResult.payload (характеристики после конвертации/нормализации,
+    то, что реально видит фронтенд). raw_ocr = null означает, что сырой
+    дамп недоступен (старый анализ до этой фичи, backend без raw_ocr, или
+    контейнер api-gateway пересоздавался после извлечения — дамп живёт на
+    локальном диске, не в volume)."""
+    if file_type not in {"tz", "passport"}:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    analysis_uuid = parse_uuid(analysis_id)
+    await _ensure_analysis_owner(analysis_uuid, db, current_user)
+    result = await db.execute(
+        select(ExtractionResult)
+        .where(ExtractionResult.analysis_id == analysis_uuid)
+        .where(ExtractionResult.file_type == file_type)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    content = {
+        "raw_ocr": read_raw_ocr_dump(str(analysis_uuid), file_type),
+        "llm_characteristics": row.payload,
+    }
+    filename = f"{file_type}_{analysis_id}.json"
+    return JSONResponse(
+        content=content,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/analyses/{analysis_id}/ocr-index/{file_type}")
@@ -1242,9 +1451,13 @@ async def get_ocr_index(
 @router.get("/analyses/{analysis_id}/comparison")
 async def get_comparison(
     analysis_id: str,
+    download: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """download=true — та же кнопка "Скачать json сравнения": сырой ответ
+    LLM сразу после сравнения (comparisons + char_name_aliases), БЕЗ
+    последующих правок пользователя (те живут в ComparisonRow, не здесь)."""
     analysis_uuid = parse_uuid(analysis_id)
     await _ensure_analysis_owner(analysis_uuid, db, current_user)
     result = await db.execute(
@@ -1253,7 +1466,12 @@ async def get_comparison(
     job = result.scalar_one_or_none()
     if job is None or job.result is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return JSONResponse(content=job.result)
+    headers = (
+        {"Content-Disposition": f'attachment; filename="comparison_{analysis_id}.json"'}
+        if download
+        else None
+    )
+    return JSONResponse(content=job.result, headers=headers)
 
 
 @router.get("/analyses/{analysis_id}/viewer-context")

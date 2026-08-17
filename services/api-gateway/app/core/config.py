@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "rpc://"
     EXTRACTION_DEBUG_DIR: str = "/tmp"
     COMP_DATA_DIR: str = "/comp_data"
+    # Сырой OCR+LLM-structuring ответ paddleocr-vl-service (до конвертации в
+    # products) — по одному файлу на (analysis_id, file_type), перезаписывается
+    # при повторном извлечении. Пишет api-gateway-worker (там выполняется
+    # finalize_extraction_task/postprocess_extraction_result — Celery-задачи),
+    # читает api-gateway (HTTP-эндпоинт скачивания) — это РАЗНЫЕ контейнеры с
+    # разными изолированными /tmp, поэтому путь обязан лежать на volume,
+    # который смонтирован в обоих (см. docker-compose.yml: comp_data уже
+    # общий для api-gateway и api-gateway-worker — переиспользуем его, а не
+    # заводим отдельный volume).
+    RAW_OCR_DIR: str = "/comp_data/raw_ocr"
 
 
 settings = Settings()

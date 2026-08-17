@@ -36,6 +36,33 @@ def _response_error_text(response: httpx.Response, service_name: str) -> str:
     return text or f"{service_name} returned HTTP {response.status_code}"
 
 
+def _raw_ocr_dump_path(analysis_id: str, file_type: str) -> Path:
+    safe_file_type = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_" for char in file_type
+    ) or "unknown"
+    return Path(settings.RAW_OCR_DIR) / f"{analysis_id}_{safe_file_type}.json"
+
+
+def _save_raw_ocr_dump(raw_ocr: Any, *, analysis_id: str, file_type: str) -> None:
+    """Пишет сырой OCR+LLM-structuring результат на диск, по одному файлу на
+    (analysis_id, file_type) — перезаписывается при повторном извлечении."""
+    target = _raw_ocr_dump_path(analysis_id, file_type)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as handle:
+        json.dump(raw_ocr, handle, ensure_ascii=True, indent=2)
+
+
+def read_raw_ocr_dump(analysis_id: str, file_type: str) -> Any | None:
+    """Читает сохранённый _save_raw_ocr_dump файл, если он есть — None, если
+    ещё не сохранён (backend без raw_ocr, старый анализ до этой фичи, или
+    контейнер api-gateway пересоздавался после извлечения)."""
+    target = _raw_ocr_dump_path(analysis_id, file_type)
+    if not target.exists():
+        return None
+    with target.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def _raise_for_status_with_detail(response: httpx.Response, service_name: str) -> None:
     if response.is_success:
         return
@@ -401,6 +428,35 @@ def _validate_characteristics_against_marking(result_payload: dict) -> int:
     return flagged
 
 
+def _target_characteristic_names(
+    file_type: str,
+    target_characteristics: list[dict] | None,
+) -> list[str]:
+    """Имена одобренных характеристик ТЗ для извлечения паспорта.
+
+    Отдаётся backend'ам, которые не читают промпт из prompt-registry
+    (yandex_vision_ocr/paddleocr_vl) — там этот список передаётся в
+    paddleocr-vl-service отдельным полем, см. extraction_payload.
+    Только имена, без значений: значение из ТЗ модель копирует вместо чтения
+    паспорта (см. _build_target_characteristics_appendix ниже)."""
+    if file_type != "passport" or not target_characteristics:
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in target_characteristics:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        cleaned = name.strip()
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        names.append(cleaned)
+    return names
+
+
 def _build_target_characteristics_appendix(
     file_type: str,
     target_characteristics: list[dict] | None,
@@ -673,6 +729,20 @@ def run_extraction_task(
             # полем, т.к. эти backend'ы промпт из prompt-registry не используют
             # напрямую (см. _extract_via_paddleocr_vl в extraction-service).
             "product_model": product_model,
+            # Имена характеристик, одобренных пользователем в ТЗ — тот же
+            # список, что уходит в промпт через target_characteristics_appendix.
+            # Отдельным полем нужен по той же причине, что и product_model:
+            # yandex_vision_ocr/paddleocr_vl промпт из prompt-registry не
+            # читают, и без этого паспорт извлекался ими "вслепую" — модель
+            # придумывала свои формулировки имён, из-за чего сопоставление с
+            # ТЗ становилось вероятностным (замер на ДЖАМБО 60/35: 7 из 15
+            # требований ТЗ вообще не доходили до таблицы сравнения).
+            # ТОЛЬКО имена, без значений — если показать модели ожидаемое
+            # значение, она копирует его вместо чтения паспорта (см.
+            # комментарий в _build_target_characteristics_appendix).
+            "target_characteristic_names": _target_characteristic_names(
+                file_type, target_characteristics
+            ),
         }
         # async_mode: только yandex_vision_ocr (облачная OCR+LLM цепочка на
         # больших документах, см. job_queue.py на стороне paddleocr-vl-service
@@ -746,6 +816,16 @@ def postprocess_extraction_result(
     единым местом вместо дублирования в двух местах."""
     if started_at is None:
         started_at = time.monotonic()
+
+    # raw_ocr — сырой OCR+LLM-structuring ответ paddleocr-vl-service ДО
+    # конвертации в products (см. extraction/app/main.py и
+    # paddleocr_vl_convert.py). Не место ему в ExtractionResult.payload
+    # (раздувает основную БД-запись, которую фронтенд читает на каждый
+    # рендер страницы анализа) — вырезаем в отдельный файл на диске, скачать
+    # можно через GET /analyses/{id}/raw-json/{file_type}.
+    raw_ocr = result_payload.pop("raw_ocr", None)
+    if raw_ocr is not None:
+        _save_raw_ocr_dump(raw_ocr, analysis_id=analysis_id, file_type=file_type)
 
     # Порядок важен: сначала чиним плоский формат LLM-ответа во ВСЕХ местах
     # (result, pages[].extracted_data), и только потом собираем

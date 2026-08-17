@@ -28,6 +28,7 @@ from app.services.extraction_jobs import (
 )
 from app.services.extraction_tasks import postprocess_extraction_result, run_extraction_task
 from app.services.paddleocr_vl_convert import convert_paddleocr_vl_callback_result
+from app.services.product_selection import resolve_target_product
 
 logger = logging.getLogger(__name__)
 
@@ -504,17 +505,24 @@ def _finalize_extraction(
     retry_kwargs={"max_retries": 3},
 )
 def try_start_comparison(analysis_id: str) -> None:
-    """Запускает сравнение, если ОБА условия выполнены: ТЗ одобрено
-    пользователем (approved TzCharacteristicReview существуют) И паспорт
-    извлечён (ExtractionResult с file_type="passport" существует).
+    """Запускает сравнение, если ВСЕ условия выполнены: ТЗ одобрено
+    пользователем (approved TzCharacteristicReview существуют), паспорт
+    извлечён (ExtractionResult с file_type="passport" существует) И целевое
+    изделие однозначно (см. resolve_target_product).
 
-    Вызывается из ДВУХ мест — после завершения извлечения паспорта
-    (_finalize_extraction) и после одобрения ТЗ пользователем
-    (continue_tz_review) — потому что при параллельном извлечении порядок,
-    в котором эти два события произойдут, заранее не известен. Если условие
-    не выполнено — тихо ничего не делает (не ошибка, просто "ещё рано");
-    сравнение уже запущено (ComparisonJob для analysis_id существует) —
-    тоже тихо ничего не делает (идемпотентность при повторном вызове)."""
+    Вызывается из ТРЁХ мест — после завершения извлечения паспорта
+    (_finalize_extraction), после одобрения ТЗ пользователем
+    (continue_tz_review) и после выбора изделия (select_product) — потому что
+    при параллельном извлечении порядок этих событий заранее не известен.
+    Если условие не выполнено — тихо ничего не делает (не ошибка, просто
+    "ещё рано"); сравнение уже запущено (ComparisonJob для analysis_id
+    существует) — тоже тихо ничего не делает (идемпотентность).
+
+    Проверка изделия живёт именно здесь, а не в continue_tz_review: ТЗ
+    извлекается параллельно с паспортом и часто доходит до tz_review РАНЬШЕ,
+    когда списка изделий паспорта ещё не существует и спрашивать нечего.
+    К моменту вызова отсюда паспорт уже разобран, поэтому вопрос задаётся
+    ровно тогда, когда на него есть чем ответить."""
     log_extra = {"analysis_id": analysis_id, "step": "try_start_comparison"}
     with SessionLocal() as session:
         approved_rows = _approved_review_characteristics(session, analysis_id)
@@ -536,6 +544,59 @@ def try_start_comparison(analysis_id: str) -> None:
         ).scalar_one_or_none()
         if analysis is None:
             return
+
+        tz_extraction = session.execute(
+            select(ExtractionResult).where(
+                ExtractionResult.analysis_id == analysis_id,
+                ExtractionResult.file_type == "tz",
+            )
+        ).scalar_one_or_none()
+
+        target_model, options = resolve_target_product(
+            tz_extraction.payload if tz_extraction else None,
+            passport_extraction.payload,
+            analysis.product_model,
+        )
+        if options:
+            # Паспорт описывает несколько изделий, и ни одно не сопоставилось
+            # с ТЗ уверенно. Молча выбрать — значит сравнить с чужим изделием,
+            # поэтому останавливаемся и ждём выбора пользователя сколько
+            # угодно долго (анализ виден в списке со статусом "выбор изделия").
+            session.execute(
+                text(
+                    "UPDATE analysis.analysis SET status=:status, updated_at=:updated_at "
+                    "WHERE id=:id AND status <> :status"
+                ),
+                {
+                    "status": "product_selection",
+                    "updated_at": datetime.utcnow(),
+                    "id": analysis_id,
+                },
+            )
+            session.commit()
+            logger.info(
+                "try_start_comparison: waiting for product choice (%d options)",
+                len(options),
+                extra=log_extra,
+            )
+            return
+
+        if target_model and analysis.product_model != target_model:
+            # Изделие определилось автоматически (уверенное совпадение имени) —
+            # фиксируем его, чтобы сравнение и UI знали цель.
+            session.execute(
+                text(
+                    "UPDATE analysis.analysis SET product_model=:model, updated_at=:updated_at "
+                    "WHERE id=:id"
+                ),
+                {
+                    "model": target_model,
+                    "updated_at": datetime.utcnow(),
+                    "id": analysis_id,
+                },
+            )
+            session.commit()
+            analysis.product_model = target_model
 
         create_job = (
             insert(ComparisonJob)

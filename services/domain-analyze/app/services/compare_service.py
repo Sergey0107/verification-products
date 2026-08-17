@@ -258,30 +258,40 @@ def _select_comparison_pair(
     if len(tz_products) == 1:
         tz_product = tz_products[0]
     else:
-        tz_product = None
-        if tz_product_model:
-            tz_product = next(
-                (
-                    p
-                    for p in tz_products
-                    if _models_match(tz_product_model, p.get("product_model"))
-                    or _models_match(tz_product_model, p.get("product_name"))
-                ),
-                None,
-            )
-        if tz_product is None:
-            tz_product = next(
-                (p for p in tz_products if p.get("product_model")), None
-            )
-        if tz_product is None:
-            tz_product = tz_products[0]
+        # ТЗ — заказ на ОДНО изделие (правило пайплайна, см. single_product в
+        # paddleocr_vl_convert.py: извлечение схлопывает ТЗ в один продукт).
+        # Несколько продуктов здесь означают либо анализ, извлечённый до этого
+        # правила, либо фантомные "изделия" от разметки LLM (маркировки
+        # комплектующих, обрывки чертежей). В обоих случаях настоящее изделие —
+        # самое наполненное: у фантомов единицы характеристик против десятков
+        # у реального. Выбирать по tz_product_model нельзя — он теперь хранит
+        # выбранное пользователем изделие ПАСПОРТА, а не ТЗ.
+        tz_product = max(tz_products, key=_count_non_empty_characteristics)
 
     target_name = tz_product.get("product_name")
     target_model = tz_product.get("product_model") or tz_product_model
 
-    passport_product = next(
-        (p for p in passport_products if p.get("product_name") == target_name), None
-    )
+    # Явный выбор пользователя (Analysis.product_model, приходит сюда как
+    # tz_product_model) — сильнее любой эвристики: если он назвал изделие
+    # паспорта, сравниваем именно с ним. Так работает статус product_selection:
+    # пайплайн ждёт этого выбора, когда имя из ТЗ не сопоставилось само.
+    passport_product = None
+    if tz_product_model:
+        passport_product = next(
+            (
+                p
+                for p in passport_products
+                if p.get("product_name") == tz_product_model
+                or _models_match(tz_product_model, p.get("product_name"))
+                or _models_match(tz_product_model, p.get("product_model"))
+            ),
+            None,
+        )
+
+    if passport_product is None:
+        passport_product = next(
+            (p for p in passport_products if p.get("product_name") == target_name), None
+        )
     if passport_product is None and target_model:
         passport_product = next(
             (
@@ -881,8 +891,17 @@ def _build_candidates_map(
     """Группирует характеристики по нормализованному (при наличии aliases —
     семантическому) имени в СПИСОК всех встреченных записей (не одну
     последнюю) — см. docstring _build_char_map. Имя с несколькими ключами
-    дублируется под каждым (см. _char_name_keys)."""
-    result: dict[str, list[dict]] = {}
+    дублируется под каждым (см. _char_name_keys).
+
+    Записи с ПУСТЫМ значением отбрасываются, если под тем же ключом есть хотя
+    бы одна заполненная: извлечение иногда даёт дубль-пустышку, когда LLM
+    забирает заголовок строки таблицы отдельно от её значения ("Напор насоса"
+    = "" рядом с "Напор, м" = "50 м"). В UI такая пустышка выглядела как
+    второй вариант значения ("Найдено 2 значения — выберите верное", второй
+    пустой), хотя выбирать там не из чего. Если заполненных записей под ключом
+    нет вовсе, пустые сохраняются — иначе характеристика исчезла бы из
+    сравнения целиком."""
+    grouped: dict[str, list[dict]] = {}
     for c in chars:
         if not isinstance(c, dict):
             continue
@@ -890,7 +909,12 @@ def _build_candidates_map(
         if not name:
             continue
         for key in _char_name_keys(name, aliases):
-            result.setdefault(key, []).append(c)
+            grouped.setdefault(key, []).append(c)
+
+    result: dict[str, list[dict]] = {}
+    for key, entries in grouped.items():
+        filled = [e for e in entries if str(e.get("value") or "").strip()]
+        result[key] = filled or entries
     return result
 
 
@@ -1034,10 +1058,25 @@ passport_names для ОБОИХ tz_name («Минимальная...» и «М�
 разные числа, не просто разные слова для одного) — такие модификаторы обозначают разные
 величины и группировать их нельзя.
 
+ВАЖНОЕ ИСКЛЮЧЕНИЕ из правила про модификаторы — БЕЗ модификатора против НЕСКОЛЬКИХ С ним.
+Правило выше запрещает связывать РАЗНЫЕ модификаторы между собой («минимальный» с
+«максимальным»), но НЕ запрещает связать паспортное имя БЕЗ модификатора с ТЗ-именами,
+которые его имеют. Типичный и очень частый случай: ТЗ задаёт величину тремя строками
+(«Расход (минимальный)», «Расход (номинальный)», «Расход (максимальный)»), а паспорт даёт
+ОДНУ строку без уточнения («Производительность насоса» = 50 м³/ч) — это та же физическая
+величина, просто паспорт приводит одно рабочее значение вместо диапазона. Верни такое
+паспортное имя в passport_names для ВСЕХ соответствующих tz_name (и для «минимальный», и
+для «номинальный», и для «максимальный»): какое именно значение подходит под какое
+требование, решит человек, а вот пропуск связи означает, что значение вообще не попадёт в
+сравнение и характеристика будет ложно помечена как отсутствующая в паспорте. То же
+касается пар «Расход»/«Подача»/«Производительность» и «Напор»/«Напор насоса» — это одна
+величина под разными общепринятыми названиями.
+
 Не объединяй характеристики, если не уверен, что это одна и та же величина — ложное
 объединение хуже, чем пропущенное совпадение. Но не будь излишне осторожен с очевидными
-случаями выше (короткое общее имя vs то же имя с уточнением, не меняющим величину) — это
-самый частый и самый безопасный тип совпадения, и его пропуск — типичная ошибка.
+случаями выше (короткое общее имя vs то же имя с уточнением, не меняющим величину; имя без
+модификатора против нескольких с модификаторами) — это самый частый и самый безопасный тип
+совпадения, и его пропуск — типичная ошибка.
 
 Верни JSON: {"matches": [{"tz_name": "...", "passport_names": ["...", "..."]}, ...]}.
 Ровно один объект на каждое входное название из ТЗ (в том же порядке, что дан список ТЗ).
@@ -1074,6 +1113,14 @@ canonical_key. Не объединяй характеристики, если н
 # с большими списками (300+) она почти перестаёт группировать вообще (см.
 # docstring ниже).
 _CHAR_ALIAS_CHUNK_SIZE = 40
+
+# Повтор сопоставления имён, когда LLM вернула подозрительно бедный ответ
+# (см. _resolve_pair_with_retry). Порог 0.35 подобран по реальным прогонам на
+# одной и той же паре документов: удачные связывали 55-70% паспортных имён,
+# провальный — около 15%. Планка ниже удачных прогонов, чтобы не гонять
+# повторы там, где документы просто мало пересекаются по смыслу.
+_ALIAS_MIN_MATCH_RATIO = 0.35
+_ALIAS_MAX_ATTEMPTS = 3
 
 
 def _resolve_char_name_aliases(
@@ -1172,6 +1219,16 @@ def _resolve_char_name_aliases(
         return names
 
     def _resolve_pair(tz_product: dict, matched_passport: list[dict]) -> dict[str, list[str]]:
+        """Сопоставляет имена ОДНОЙ пары моделей. При подозрительно бедном
+        ответе повторяет запрос: LLM здесь нестабильна и иногда молча
+        возвращает почти пустой список совпадений.
+
+        Реальный инцидент (2026-08-13): на одних и тех же документах один
+        прогон дал 86 алиасов и связал "Производительность насоса"→"Расход",
+        "Напор насоса"→"Напор", а следующий — 65 алиасов вообще без этих
+        связей, из-за чего ключевые характеристики паспорта перестали
+        находиться. Ошибки при этом не было: ответ валидный, просто неполный.
+        Повторный вызов на тех же данных снова связывал всё верно."""
         tz_names = _dedup_names([tz_product])
         passport_names = _dedup_names(matched_passport)
         if not tz_names or not passport_names:
@@ -1246,13 +1303,63 @@ def _resolve_char_name_aliases(
                 _add_alias(_normalize_char_name(passport_name), canonical_key)
         return pair_aliases
 
+    def _resolve_pair_with_retry(
+        tz_product: dict, matched_passport: list[dict]
+    ) -> dict[str, list[str]]:
+        """_resolve_pair + повтор, если ответ выглядит подозрительно бедным.
+
+        Мера "бедности" — сколько ПАСПОРТНЫХ имён модель реально привязала к
+        требованиям ТЗ (ключи, не совпадающие с самим canonical_key). Полный
+        ответ связывает заметную часть паспорта; ответ, где связано меньше
+        _ALIAS_MIN_MATCH_RATIO, почти всегда означает, что LLM "сдалась" —
+        такой прогон дешевле повторить, чем потерять половину сравнения."""
+        passport_names = _dedup_names(matched_passport)
+        expected = len(passport_names)
+        best: dict[str, list[str]] = {}
+        best_linked = -1
+
+        for attempt in range(1, _ALIAS_MAX_ATTEMPTS + 1):
+            pair_aliases = _resolve_pair(tz_product, matched_passport)
+            linked = sum(
+                1
+                for name_key, canonical_keys in pair_aliases.items()
+                if any(key != name_key for key in canonical_keys)
+            )
+            if linked > best_linked:
+                best, best_linked = pair_aliases, linked
+
+            if not expected or linked >= expected * _ALIAS_MIN_MATCH_RATIO:
+                if attempt > 1:
+                    logger.info(
+                        "resolve_char_name_aliases: retry %d recovered %d/%d passport name(s)",
+                        attempt, linked, expected,
+                        extra={"step": "compare_char_aliases_retry_ok"},
+                    )
+                return pair_aliases
+
+            logger.warning(
+                "resolve_char_name_aliases: only %d/%d passport name(s) matched "
+                "(attempt %d/%d) — LLM likely returned an incomplete answer, retrying",
+                linked, expected, attempt, _ALIAS_MAX_ATTEMPTS,
+                extra={"step": "compare_char_aliases_sparse"},
+            )
+
+        logger.warning(
+            "resolve_char_name_aliases: still sparse after %d attempts, keeping best (%d/%d)",
+            _ALIAS_MAX_ATTEMPTS, best_linked, expected,
+            extra={"step": "compare_char_aliases_sparse_final"},
+        )
+        return best
+
     started_at = time.monotonic()
     if model_pairs:
         # Модели независимы — тот же паттерн параллелизации, что уже
         # используется для чанков самого сравнения (compare_json) — потоки,
         # т.к. каждый вызов — блокирующий HTTP-запрос.
         with ThreadPoolExecutor(max_workers=min(8, len(model_pairs))) as executor:
-            for pair_aliases in executor.map(lambda pair: _resolve_pair(*pair), model_pairs):
+            for pair_aliases in executor.map(
+                lambda pair: _resolve_pair_with_retry(*pair), model_pairs
+            ):
                 for name_key, canonical_keys in pair_aliases.items():
                     existing = aliases.setdefault(name_key, [])
                     for key in canonical_keys:
@@ -1285,7 +1392,72 @@ def _resolve_char_name_aliases(
         time.monotonic() - started_at,
         extra={"step": "compare_char_aliases_response"},
     )
+    _log_alias_pairs(aliases, tz_products, passport_products)
     return aliases
+
+
+def _log_alias_pairs(
+    aliases: dict[str, list[str]],
+    tz_products: list[dict],
+    passport_products: list[dict],
+) -> None:
+    """Пишет в лог, какое имя ТЗ с каким именем паспорта связано алиасингом и
+    какие имена ТЗ остались без пары.
+
+    Сводного счётчика выше недостаточно для разбора жалоб вида «характеристика
+    есть в обоих документах, но в таблице пусто»: по нему видно, что алиасы
+    построены, но не видно, ЧТО с ЧЕМ связано. Реальный случай — «Уплотнение
+    вала» (ТЗ) и «Торцевое уплотнение» (паспорт): одна и та же деталь, но
+    LLM их не сгруппировала, и строка ушла в «не найдено» без всякого следа в
+    логах. Здесь такой пропуск виден сразу.
+
+    Только логирование, на результат сравнения не влияет."""
+    def _names(products: list[dict]) -> list[str]:
+        out: list[str] = []
+        for product in products:
+            for item in product.get("characteristics", []) or []:
+                name = item.get("name")
+                if isinstance(name, str) and name.strip():
+                    out.append(name.strip())
+        return out
+
+    tz_names = _names(tz_products)
+    passport_names = _names(passport_products)
+
+    # canonical_key -> какие исходные имена паспорта в него попали
+    passport_by_key: dict[str, list[str]] = {}
+    for name in passport_names:
+        for key in _char_name_keys(name, aliases):
+            bucket = passport_by_key.setdefault(key, [])
+            if name not in bucket:
+                bucket.append(name)
+
+    matched: list[str] = []
+    unmatched: list[str] = []
+    for name in tz_names:
+        keys = _char_name_keys(name, aliases)
+        partners = [p for key in keys for p in passport_by_key.get(key, [])]
+        if partners:
+            # Показываем только реальные переименования: если имена совпали
+            # дословно, связывать было нечего и в логе это лишний шум.
+            if any(p.strip().lower() != name.strip().lower() for p in partners):
+                matched.append(f"{name!r} ~ {[p for p in partners]!r}")
+        else:
+            unmatched.append(name)
+
+    if matched:
+        logger.info(
+            "compare aliases: %d TZ name(s) matched to a DIFFERENT passport name: %s",
+            len(matched), "; ".join(matched[:40]),
+            extra={"step": "compare_char_aliases_pairs"},
+        )
+    if unmatched:
+        logger.warning(
+            "compare aliases: %d TZ name(s) WITHOUT a passport counterpart "
+            "(these become 'не найдено' rows — check the document if the data is actually there): %s",
+            len(unmatched), "; ".join(repr(n) for n in unmatched[:40]),
+            extra={"step": "compare_char_aliases_unmatched"},
+        )
 
 
 def _resolve_char_name_aliases_whole_document(
@@ -1940,6 +2112,20 @@ def compare_json(
                 and item.get("in_tz")
             ):
                 comparisons[idx]["status"] = "uncertain"
+            # Чисто-паспортная характеристика (в ТЗ требования не было) с
+            # непустым значением: статус not_found здесь семантически верен —
+            # в контексте ТЗ это действительно "не найдено". Но рядом с
+            # показанным паспортным значением он читается как противоречие
+            # ("значение вижу, а написано не найдено"), поэтому поясняем это
+            # словами, не трогая сам статус.
+            elif (
+                comparisons[idx].get("status") == "not_found"
+                and item.get("passport_value")
+                and not item.get("in_tz")
+            ):
+                comparisons[idx]["note"] = (
+                    "Есть только в паспорте — в ТЗ такого требования нет."
+                )
             # LLM иногда пишет note вида «характеристика отсутствует в паспорте»,
             # хотя passport_value/tz_value в этой же строке непустые (взяты из
             # извлечения документа, а не от LLM) — такой note противоречит данным
